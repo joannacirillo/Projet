@@ -3,4 +3,5 @@ Problèmes à régler :
 
 A faire :
  - Estimation du RTT pour le timeout des ACK (et pour le sleep après retransmission)
+ - Semaphore pour la restransmission
  - rendre la fenêtre dynamique

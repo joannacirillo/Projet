@@ -9,11 +9,13 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #define CWND 10
 #define SIZE_TAB 1000
 #define SIZE_MESSAGE 1000
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+sem_t semaphore;
 
 struct arg_struct{
   int arg_a; //nom de la socket utile
@@ -131,12 +133,13 @@ void *ack_routine(void *arguments){
       char ackseq[7];  // récupérer "00000N" dans "ACK00000N"
       memset(ackseq, 0, 7);
       memcpy(ackseq, ack+3, 6);
-      printf("ack: %s, num sequence: %d\n", ackack, atoi(ackseq));
+      // printf("ack: %s, num sequence: %d\n", ackack, atoi(ackseq));
+      printf("ACK %d received\n", atoi(ackseq));
       sequenceNB = atoi(ackseq)%SIZE_TAB;
       if(strcmp(ackack, "ACK")==0){
 
         if(tab_ack[sequenceNB]==1){  // ACK normal
-          printf("ACK %d received\n", atoi(ackseq));
+          // printf("ACK %d received\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           for(int i=0; i<SIZE_TAB; i++){
             if(tab_ack[(sequenceNB-i)%SIZE_TAB]==1){
@@ -149,18 +152,23 @@ void *ack_routine(void *arguments){
           }
           pthread_mutex_unlock(&lock);
         }
+
         else if(tab_ack[sequenceNB-1]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
           printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_window = 0;  // on met window à 0 pour que le serveur ne puisse plus envoyer et retransmette
           pthread_mutex_unlock(&lock);
         }
+
         printf("thread: "); display(tab_ack, SIZE_TAB);
+
         if(tab_ack[(sequenceNB+1)%SIZE_TAB]==-1){
+          printf("pthread_exit\n");
           pthread_exit(0);
         }
+
       }  // fin du if(strcmp(ack, "ACK"))
-    }
+    }  // fin du select
     // timersub(&receive_time, &send_time, &rtt);
     // srtt = srtt(srtt, rtt);
   }
@@ -175,6 +183,8 @@ int main(int argc, char* argv[]){
     printf("Incorrect number of arguments. Please launch the program under the form: ./serveur <port-serveur>\n");
     exit(0);
   }
+
+  // Configuration TCP
 
   int server_port = atoi(argv[1]);
 
@@ -201,12 +211,12 @@ int main(int argc, char* argv[]){
 
   int a = acceptUDP(server_port, serverSocket, client_addr, sockaddr_length);
 
+  // Envoi du fichier au client
 
   // while(1){  // tant que le client demande des fichiers
     char filename[100] = "";
     int r = recvfrom(a, &filename, sizeof(filename), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
     if(r<0){perror(""); exit(0);}
-    printf("message received: %s\n", filename);
 
     /***********************************************************************
     ************************** ENVOI DU FICHIER ****************************
@@ -252,6 +262,12 @@ int main(int argc, char* argv[]){
       if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
         perror("pthread_create() ack_thread:"); exit(0);
       }
+      if(pthread_mutex_init(&lock, NULL) != 0){  // initialisation du mutex
+        perror("pthread_mutex_init():"); exit(0);
+      }
+      if(int sem_init(&semaphore, PTHREAD_PROCESS_SHARED, 1){  // initialisation de la sémaphore
+        perror("sem_init():"); exit(0);
+      }
 
 
       do{  // tant que le fichier n'a pas été envoyé en entier
@@ -271,7 +287,7 @@ int main(int argc, char* argv[]){
           // Envoi du paquet
           int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
           if(s<0){perror(""); exit(0);}
-          printf("packet #%d sent - size: %d\n", sequenceNB, s);
+          printf("packet #%d sent\n", sequenceNB);
           gettimeofday(&send_time,0);
 
           // Mise à jour sliding window
@@ -293,7 +309,7 @@ int main(int argc, char* argv[]){
               // Envoi du paquet
               int s = sendto(a, message, sizeof(tab_segments[i]), MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
               if(s<0){perror(""); exit(0);}
-              printf("packet #%d sent - size: %d\n", i, s);
+              printf("packet #%d sent\n", i);
               new_wind = new_wind + 1;
             }
           }
@@ -313,11 +329,11 @@ int main(int argc, char* argv[]){
       // envoi d'un message DONE pour dire que c'est la fin
       int s = sendto(a, "FIN", 4, MSG_CONFIRM, (const struct sockaddr*)&client_addr, sockaddr_length);
       if(s<0){perror(""); exit(0);}
-      printf("DONE sent\n");
-      char ack[5]="";
-      r = recvfrom(a, &ack, 5, MSG_WAITALL, (struct sockaddr *) &client_addr, &sockaddr_length);
-      if(r<0){perror(""); exit(0);}
-      if(strcmp(ack, "ACK")==0){printf("ACK received\n");}
+      printf("FIN sent\n");
+      // char ack[5]="";
+      // r = recvfrom(a, &ack, 5, MSG_WAITALL, (struct sockaddr *) &client_addr, &sockaddr_length);
+      // if(r<0){perror(""); exit(0);}
+      // if(strcmp(ack, "ACK")==0){printf("ACK received\n");}
 
 
     // }
