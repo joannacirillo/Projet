@@ -145,6 +145,7 @@ void *ack_routine(void *arguments){
             if(tab_ack[(sequenceNB-i)%SIZE_TAB]==1){
               tab_ack[(sequenceNB-i)%SIZE_TAB] = 2;  // 2 -> ce segment a été acquitté
               *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
+              sem_post(&semaphore);
             }
             else if(tab_ack[(sequenceNB-i)%SIZE_TAB]==0){
               break;
@@ -153,7 +154,7 @@ void *ack_routine(void *arguments){
           pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB-1]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
+        else if(tab_ack[sequenceNB]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
           printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_window = 0;  // on met window à 0 pour que le serveur ne puisse plus envoyer et retransmette
@@ -265,7 +266,7 @@ int main(int argc, char* argv[]){
       if(pthread_mutex_init(&lock, NULL) != 0){  // initialisation du mutex
         perror("pthread_mutex_init():"); exit(0);
       }
-      if(int sem_init(&semaphore, PTHREAD_PROCESS_SHARED, 1){  // initialisation de la sémaphore
+      if(sem_init(&semaphore, PTHREAD_PROCESS_SHARED, CWND)){  // initialisation de la sémaphore
         perror("sem_init():"); exit(0);
       }
 
@@ -276,26 +277,31 @@ int main(int argc, char* argv[]){
         display(tab_ack, SIZE_TAB);
 
         if(window>0){
-          // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-          char message[SIZE_MESSAGE] = "";
-          sprintf(message, "%06d", sequenceNB);  // put sequence number in message
-          fr = fread(file_data, 1, sizeof(file_data), file);
-          memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
-          // tab_segments[sequenceNB%SIZE_TAB] = malloc(sizeof(message));
-          memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
+          if(fr==sizeof(file_data) || fr==0){
+            // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
+            char message[SIZE_MESSAGE] = "";
+            sprintf(message, "%06d", sequenceNB);  // put sequence number in message
+            fr = fread(file_data, 1, sizeof(file_data), file);
+            memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
+            // tab_segments[sequenceNB%SIZE_TAB] = malloc(sizeof(message));
+            memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
 
-          // Envoi du paquet
-          int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
-          if(s<0){perror(""); exit(0);}
-          printf("packet #%d sent\n", sequenceNB);
-          gettimeofday(&send_time,0);
+            // Envoi du paquet
+            int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
+            if(s<0){perror(""); exit(0);}
+            printf("packet #%d sent\n", sequenceNB);
+            gettimeofday(&send_time,0);
 
-          // Mise à jour sliding window
-          pthread_mutex_lock(&lock);
-          window = window - 1;  // Décrémentation de la fenêtre de transmission
-          tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
-          sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
-          pthread_mutex_unlock(&lock);
+            // Mise à jour sliding window
+            pthread_mutex_lock(&lock);
+            window = window - 1;  // Décrémentation de la fenêtre de transmission
+            tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
+            sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
+            if(fr!=sizeof(file_data)){
+              tab_ack[sequenceNB%SIZE_TAB] = -1;
+            }
+            pthread_mutex_unlock(&lock);
+          }
         }
         else{  // window = 0 => retransmettre
           int new_wind = 0;
@@ -316,14 +322,13 @@ int main(int argc, char* argv[]){
           pthread_mutex_lock(&lock);
           window = CWND - new_wind;
           pthread_mutex_unlock(&lock);
-          sleep(1);
+
+          sem_wait(&semaphore);
         }
 
-      }while(fr == sizeof(file_data));  // le fichier a été envoyé en entier
+      // }while(fr == sizeof(file_data));  // le fichier a été envoyé en entier
+    }while(tab_ack[sequenceNB-1]!=2 || fr == sizeof(file_data));  // le dernier paquet envoyé n'a pas encore été acquitté et le paquet suivant n'est pas le dernier
 
-      pthread_mutex_lock(&lock);
-      tab_ack[sequenceNB%SIZE_TAB] = -1;
-      pthread_mutex_unlock(&lock);
       pthread_join(ack_thread, NULL);
 
       // envoi d'un message DONE pour dire que c'est la fin
