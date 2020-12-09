@@ -12,11 +12,10 @@
 #include <semaphore.h>
 #include <math.h>
 
-#define CWND 10
+// #define CWND 10
 #define SIZE_TAB 1000
 #define SIZE_MESSAGE 1000
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-// sem_t semaphore;
 
 struct arg_struct{
   int arg_a; //nom de la socket utile
@@ -27,7 +26,7 @@ struct arg_struct{
   int* arg_window;
   int* arg_retransmission;
   struct timeval* send_time_tab;
-  // int* arg_cwnd;
+  int* arg_cwnd;
 };
 
 
@@ -114,7 +113,7 @@ void *ack_routine(void *arguments){
   int* p_window = args->arg_window;
   int* p_retransmission = args->arg_retransmission;
   struct timeval *send_time_tab = args->send_time_tab;
-  // int* p_cwnd = args->arg_cwnd;
+  int* p_cwnd = args->arg_cwnd;
 
   struct timeval srtt;
   struct timeval srtt_for_select;
@@ -145,18 +144,16 @@ void *ack_routine(void *arguments){
       char ackseq[7];  // récupérer "00000N" dans "ACK00000N"
       memset(ackseq, 0, 7);
       memcpy(ackseq, ack+3, 6);
-      // printf("ack: %s, num sequence: %d\n", ackack, atoi(ackseq));
-      printf("ACK %d received\n", atoi(ackseq));
+      // printf("ACK %d received\n", atoi(ackseq));
       sequenceNB = atoi(ackseq)%SIZE_TAB;
       gettimeofday(&receive_time_tab[sequenceNB],0);
 
       if(strcmp(ackack, "ACK")==0){
 
         if(tab_ack[sequenceNB]==1){  // ACK normal
-          // printf("ACK %d received\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 0;
-          for(int i=0; i<CWND; i++){
+          for(int i=0; i<*p_cwnd; i++){
             int index = sequenceNB-i;
             if(sequenceNB-i < 0){
               index = SIZE_TAB + index;
@@ -164,8 +161,7 @@ void *ack_routine(void *arguments){
             if(tab_ack[index]==1){
               tab_ack[index] = 2;  // 2 -> ce segment a été acquitté
               *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
-              // *p_cwnd = *p_cwnd + 1;
-              // sem_post(&semaphore);
+              *p_cwnd = *p_cwnd + 1;
             }
             else if(tab_ack[(sequenceNB-i)%SIZE_TAB]==0){
               break;
@@ -175,14 +171,14 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
+          // printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 1;
-          // *p_window = 0;  // on met window à 0 pour que le serveur ne puisse plus envoyer et retransmette
+          *p_cwnd = 1;
           pthread_mutex_unlock(&lock);
         }
 
-        printf("thread: "); display(tab_ack, SIZE_TAB);
+        // printf("thread: "); display(tab_ack, SIZE_TAB);
 
         if(tab_ack[(sequenceNB+1)%SIZE_TAB]==-1){
           printf("pthread_exit\n");
@@ -198,7 +194,7 @@ void *ack_routine(void *arguments){
       // printf("thread - timeout\n");
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
-      // *p_window = 0;  // on met window à 0 pour que le serveur ne puisse plus envoyer et retransmette
+      *p_cwnd = 1;
       pthread_mutex_unlock(&lock);
     }
 
@@ -274,18 +270,14 @@ int main(int argc, char* argv[]){
         tab_ack[i] = 0;
       }
       char tab_segments[SIZE_TAB][SIZE_MESSAGE];
-      // for(int i=0; i<SIZE_TAB; i++){
-      //   for(int j=0; j<SIZE_MESSAGE; j++){
-      //     tab_segments[i][j] = "";
-      //   }
-      // }
-      // int CWND = 1;
-      int window = CWND;
+      int cwnd = 1;
+      int window = cwnd;
       int retransmission = 0;
       struct timeval send_time_tab[SIZE_TAB];
       for(int i=0; i<SIZE_TAB; i++){
         send_time_tab[i] = (struct timeval){0};
       }
+      int size;
 
       // CRÉATION DU THREAD POUR LA RÉCEPTION DES ACK
       pthread_t ack_thread;
@@ -300,7 +292,7 @@ int main(int argc, char* argv[]){
       args.arg_window = &window;
       args.send_time_tab = send_time_tab;
       args.arg_retransmission = &retransmission;
-      // args.arg_cwnd = &CWND;
+      args.arg_cwnd = &cwnd;
 
       if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
         perror("pthread_create() ack_thread:"); exit(0);
@@ -308,17 +300,9 @@ int main(int argc, char* argv[]){
       if(pthread_mutex_init(&lock, NULL) != 0){  // initialisation du mutex
         perror("pthread_mutex_init():"); exit(0);
       }
-      // if(sem_init(&semaphore, PTHREAD_PROCESS_SHARED, CWND)){  // initialisation de la sémaphore
-      //   perror("sem_init():"); exit(0);
-      // }
-
 
       do{  // tant que le fichier n'a pas été envoyé en entier
-        // printf("début du do - window=%d - buffer: ", window);
-        // for(int i=0; i<first_nil_index(seqNb_tab); i++){
-        // display(tab_ack, SIZE_TAB);
 
-        // if(window>0){
         if(window>0 && retransmission==0){
           if(fr==sizeof(file_data) || fr==0){
             // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
@@ -326,13 +310,15 @@ int main(int argc, char* argv[]){
             sprintf(message, "%06d", sequenceNB);  // put sequence number in message
             fr = fread(file_data, 1, sizeof(file_data), file);
             memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
-            // tab_segments[sequenceNB%SIZE_TAB] = malloc(sizeof(message));
             memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
+            // memcpy(&tab_segments[sequenceNB%SIZE_TAB] + fr+7, &"\0", 1); // put read data in tab_segments at index corresponding to current sequence number
+            // printf("size of tab_segments[%d]: %d\n", sequenceNB, sizeof(tab_segments[sequenceNB%SIZE_TAB]));
 
             // Envoi du paquet
             int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
             if(s<0){perror(""); exit(0);}
-            printf("packet #%d sent\n", sequenceNB);
+            // printf("packet #%d sent\n", sequenceNB);
+            // printf("size: %d\n", s);
             gettimeofday(&send_time_tab[sequenceNB%SIZE_TAB],0);
 
             // Mise à jour sliding window
@@ -347,29 +333,31 @@ int main(int argc, char* argv[]){
           }
         }
         else if(retransmission==1){
-        // else{  // window = 0 => retransmettre
-          int new_wind = 0;
-          printf("RETRANSMISSION\n");
+          // printf("RETRANSMISSION\n");
           for(int i=0; i<SIZE_TAB; i++){
             if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
+              if(feof(file) && i == (sequenceNB-1)%SIZE_TAB){
+                size = fr+6;
+              }
+              else{
+                size = sizeof(tab_segments[i]);
+              }
               char message[SIZE_MESSAGE] = "";
-              memcpy(&message, &tab_segments[i], sizeof(tab_segments[i]));  // put read data in message after sequence number
+              memcpy(&message, &tab_segments[i], size);  // put read data in message after sequence number
 
               // Envoi du paquet
-              int s = sendto(a, message, sizeof(tab_segments[i]), MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
+              int s = sendto(a, message, size, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
               if(s<0){perror(""); exit(0);}
-              printf("packet #%d sent\n", i);
-              new_wind = new_wind + 1;
+              // printf("packet #%d sent\n", i);
               gettimeofday(&send_time_tab[i],0);
             }
           }
           pthread_mutex_lock(&lock);
-          window = CWND - new_wind;
+          window = cwnd;
           pthread_mutex_unlock(&lock);
 
           retransmission = 0;
-          // sem_wait(&semaphore);
         }
 
   }while(tab_ack[(sequenceNB-1)%SIZE_TAB]!=2 || !feof(file));  // le dernier paquet envoyé n'a pas encore été acquitté et le paquet suivant n'est pas le dernier

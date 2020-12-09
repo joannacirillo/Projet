@@ -4,6 +4,5 @@ Problèmes à régler :
  A faire :
   - rendre la fenêtre dynamique
   - implémenter slow start sur serveur1
-
-
-7,16 Mb/s
+  - retransmission : ne renvoyer que le premier paquet perdu et pas toute la fenêtre
+  - attendre 2 et pas 1 seul ack dupliqué pour retransmettre
