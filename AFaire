@@ -1,8 +1,9 @@
 Problèmes à régler :
-- variable retransmission -> 1 si il faut retransmettre (timeout des ACK ou ACK dupliqué) et 0 sinon
-- dans le main : tester if(window!=0 && retransmission==0) -> transmet normalement
-                        else if(window==0 && retransmission==1) -> retransmettre
-- enlever la sémaphore
 
-A faire :
- - rendre la fenêtre dynamique
+
+ A faire :
+  - rendre la fenêtre dynamique
+  - implémenter slow start sur serveur1
+
+
+7,16 Mb/s
