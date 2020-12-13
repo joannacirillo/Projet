@@ -45,7 +45,7 @@ void display(int* array, int size){
 // FONCTION POUR CALCULER LE RTT (POUR LE TIMER DES ACKS)
 struct timeval srtt_estimation(struct timeval old_srtt, struct timeval old_rtt){
   // SRTT(k) = alpha*SRTT(k-1) + (1-alpha)*RTT(k-1)
-  double alpha = 0.6;
+  double alpha = 0.3;
   struct timeval new_srtt;
   long new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
   new_srtt.tv_sec = (time_t)(floor(new_srtt_db * 0.000001));
@@ -144,7 +144,7 @@ void *ack_routine(void *arguments){
       char ackseq[7];  // récupérer "00000N" dans "ACK00000N"
       memset(ackseq, 0, 7);
       memcpy(ackseq, ack+3, 6);
-      // printf("ACK %d received\n", atoi(ackseq));
+      printf("ACK %d received\n", atoi(ackseq));
       sequenceNB = atoi(ackseq)%SIZE_TAB;
       gettimeofday(&receive_time_tab[sequenceNB],0);
 
@@ -170,12 +170,19 @@ void *ack_routine(void *arguments){
           pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          // printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
-          pthread_mutex_lock(&lock);
-          *p_retransmission = 1;
-          *p_cwnd = 1;
-          pthread_mutex_unlock(&lock);
+        else if(tab_ack[sequenceNB]>=2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
+          if(tab_ack[sequenceNB]==2){
+            printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
+            tab_ack[sequenceNB]=3;
+          }
+          else {
+            printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
+            pthread_mutex_lock(&lock);
+            *p_retransmission = 1;
+            *p_cwnd = 1;
+            pthread_mutex_unlock(&lock);
+            tab_ack[sequenceNB]=2;
+          }
         }
 
         // printf("thread: "); display(tab_ack, SIZE_TAB);
@@ -191,7 +198,7 @@ void *ack_routine(void *arguments){
 
     }
     else{  // pas d'activité sur server socket
-      // printf("thread - timeout\n");
+      printf("thread - timeout\n");
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
       *p_cwnd = 1;
@@ -317,7 +324,7 @@ int main(int argc, char* argv[]){
             // Envoi du paquet
             int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
             if(s<0){perror(""); exit(0);}
-            // printf("packet #%d sent\n", sequenceNB);
+            printf("packet #%d sent\n", sequenceNB);
             // printf("size: %d\n", s);
             gettimeofday(&send_time_tab[sequenceNB%SIZE_TAB],0);
 
@@ -333,7 +340,7 @@ int main(int argc, char* argv[]){
           }
         }
         else if(retransmission==1){
-          // printf("RETRANSMISSION\n");
+          printf("RETRANSMISSION\n");
           for(int i=0; i<SIZE_TAB; i++){
             if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
@@ -349,7 +356,7 @@ int main(int argc, char* argv[]){
               // Envoi du paquet
               int s = sendto(a, message, size, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
               if(s<0){perror(""); exit(0);}
-              // printf("packet #%d sent\n", i);
+              printf("packet #%d sent\n", i);
               gettimeofday(&send_time_tab[i],0);
             }
           }
