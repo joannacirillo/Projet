@@ -171,18 +171,18 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]>=2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          if(tab_ack[sequenceNB]==2){
-            printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
-            tab_ack[sequenceNB]=3;
-          }
-          else {
+          // if(tab_ack[sequenceNB]==2){
+          //   printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
+          //   tab_ack[sequenceNB]=3;
+          // }
+          // else {
             printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
             *p_cwnd = 1;
             pthread_mutex_unlock(&lock);
-            tab_ack[sequenceNB]=2;
-          }
+            // tab_ack[sequenceNB]=2;
+          // }
         }
 
         // printf("thread: "); display(tab_ack, SIZE_TAB);
