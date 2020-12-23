@@ -29,6 +29,13 @@ struct arg_struct{
   int* arg_cwnd;
 };
 
+struct arg_ca{
+  int* arg_window;
+  int* arg_cwnd;
+  int* arg_mode;
+  struct timeval* arg_srtt;
+};
+
 
 void display(int* array, int size){
   for(int i=0; i<size; i++){
@@ -99,6 +106,34 @@ int acceptUDP(int server_port, int serverSocket, struct sockaddr_in client_addr,
 
 }
 
+void *congestion_avoidance(void *arguments){
+  struct arg_ca *args = arguments;
+  int* p_window = args->arg_window;
+  int* p_cwnd = args->arg_cwnd;
+  int* p_mode = args->arg_mode;
+  struct timeval* p_srtt = args->arg_srtt;
+  printf("Thread congestion avoidance\n");
+
+  while(1){
+    struct timeval t0;
+    struct timeval t1;
+    gettimeofday(&t0,0);
+    while(1){
+      gettimeofday(&t1,0);
+      if((t1.tv_sec+t1.tv_usec*0.000001)>(t0.tv_sec+t0.tv_usec*0.000001)+((*p_srtt).tv_sec + (*p_srtt).tv_usec*0.000001)){
+        //printf("srtt : %f\n",(*p_srtt).tv_sec + (*p_srtt).tv_usec*0.000001);
+        printf("Update cwnd\n");
+        if(*p_mode == 1){
+          pthread_mutex_lock(&lock);
+          *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
+          *p_cwnd = *p_cwnd + 1;
+          pthread_mutex_unlock(&lock);
+        }
+        break;
+      }
+    }
+  }
+}
 
 /*******************************************************************************
 ************ FONCTION EXÉCUTÉE PAR LE THREAD QUI REÇOIT LES ACK ****************
@@ -122,10 +157,36 @@ void *ack_routine(void *arguments){
   rtt.tv_sec = 1; rtt.tv_usec = 0;
   struct timeval receive_time_tab[SIZE_TAB];
   int sequenceNB;
+  int mode = 0; //Mode de retransmission : 0:slow start 1:Congestion avoidance
+  int ssthresh = 1000;
 
   printf("Thread created\n");
 
+  // -- Création du thread pour congestion avoidance --
+  pthread_t congestion_thread;
+
+  // définition des arguments à passer au thread congestion avoidance :
+  struct arg_ca args_congestion_avoidance;
+  args_congestion_avoidance.arg_window = p_window;
+  args_congestion_avoidance.arg_cwnd = p_cwnd;
+  args_congestion_avoidance.arg_mode = &mode;
+  args_congestion_avoidance.arg_srtt = &srtt;
+
+  if(pthread_create(&congestion_thread, NULL, congestion_avoidance, (void*) &args_congestion_avoidance) != 0){
+    perror("pthread_create() ack_thread:"); exit(0);
+  }
+
   while(1){
+    if(*p_cwnd>ssthresh){
+      mode = 1;
+    } else {
+      mode = 0;
+    }
+    printf("mode : %d\n",mode);
+    printf("cwnd : %d\n",*p_cwnd);
+    if(mode==1){
+      sleep(5000);
+    }
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
     FD_SET(a, &socketDescriptorSet);
@@ -160,8 +221,10 @@ void *ack_routine(void *arguments){
             }
             if(tab_ack[index]==1){
               tab_ack[index] = 2;  // 2 -> ce segment a été acquitté
-              *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
-              *p_cwnd = *p_cwnd + 1;
+              if(mode==0){
+                *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
+                *p_cwnd = *p_cwnd + 1;
+              }
             }
             else if(tab_ack[(sequenceNB-i)%SIZE_TAB]==0){
               break;
@@ -177,10 +240,14 @@ void *ack_routine(void *arguments){
           // }
           // else {
             printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
+
+            ssthresh = round(*p_window/2);
+            printf("ssthresh : %d\n",ssthresh );
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            *p_cwnd = 1;
+            *p_cwnd = ssthresh;
             pthread_mutex_unlock(&lock);
+            mode = 1;
             // tab_ack[sequenceNB]=2;
           // }
         }
@@ -199,10 +266,13 @@ void *ack_routine(void *arguments){
     }
     else{  // pas d'activité sur server socket
       printf("thread - timeout\n");
+      ssthresh = round(*p_window/2);
+      printf("ssthresh : %d\n",ssthresh );
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
       *p_cwnd = 1;
       pthread_mutex_unlock(&lock);
+      mode = 0;
     }
 
   }
@@ -312,6 +382,7 @@ int main(int argc, char* argv[]){
 
         if(window>0 && retransmission==0){
           if(fr==sizeof(file_data) || fr==0){
+            printf("cwnd : %d\n",cwnd);
             // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
             char message[SIZE_MESSAGE] = "";
             sprintf(message, "%06d", sequenceNB);  // put sequence number in message
@@ -341,6 +412,7 @@ int main(int argc, char* argv[]){
         }
         else if(retransmission==1){
           printf("RETRANSMISSION\n");
+          printf("window : %d\n",window);
           for(int i=0; i<SIZE_TAB; i++){
             if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
@@ -363,7 +435,7 @@ int main(int argc, char* argv[]){
           pthread_mutex_lock(&lock);
           window = cwnd;
           pthread_mutex_unlock(&lock);
-
+          printf("window : %d\n",window);
           retransmission = 0;
         }
 
