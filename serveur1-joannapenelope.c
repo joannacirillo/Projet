@@ -386,6 +386,7 @@ int main(int argc, char* argv[]){
 
     /******************* FIN DE L'ENVOI DU FICHIER ************************/
 
+  close(a);
   close(serverSocket);
 
   struct timeval end;
