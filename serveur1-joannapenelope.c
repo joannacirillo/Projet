@@ -12,7 +12,6 @@
 #include <semaphore.h>
 #include <math.h>
 
-// #define CWND 10
 #define SIZE_TAB 1000
 #define SIZE_MESSAGE 1000
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -26,7 +25,7 @@ struct arg_struct{
   int* arg_window;
   int* arg_retransmission;
   struct timeval* send_time_tab;
-  int* arg_cwnd;
+  double* arg_cwnd;
 };
 
 
@@ -45,7 +44,7 @@ void display(int* array, int size){
 // FONCTION POUR CALCULER LE RTT (POUR LE TIMER DES ACKS)
 struct timeval srtt_estimation(struct timeval old_srtt, struct timeval old_rtt){
   // SRTT(k) = alpha*SRTT(k-1) + (1-alpha)*RTT(k-1)
-  double alpha = 0.3;
+  double alpha = 0.5;
   struct timeval new_srtt;
   long new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
   new_srtt.tv_sec = (time_t)(floor(new_srtt_db * 0.000001));
@@ -126,7 +125,7 @@ void *ack_routine(void *arguments){
   int* p_window = args->arg_window;
   int* p_retransmission = args->arg_retransmission;
   struct timeval *send_time_tab = args->send_time_tab;
-  int* p_cwnd = args->arg_cwnd;
+  double* p_cwnd = args->arg_cwnd;
 
   struct timeval srtt;
   struct timeval srtt_for_select;
@@ -135,10 +134,15 @@ void *ack_routine(void *arguments){
   rtt.tv_sec = 1; rtt.tv_usec = 0;
   struct timeval receive_time_tab[SIZE_TAB];
   int sequenceNB;
+  int mode = 0; // mode de retransmission (0: slow start, 1: congestion avoidance)
+  int ssthresh = 1000;
 
   printf("Thread created\n");
 
   while(1){
+    mode = (*p_cwnd >= ssthresh);
+    printf("mode : %d\n",mode);
+    printf("cwnd : %d\n", (int)(floor(*p_cwnd)));
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
     FD_SET(a, &socketDescriptorSet);
@@ -168,14 +172,26 @@ void *ack_routine(void *arguments){
           *p_retransmission = 0;
           tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
           *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
-          *p_cwnd = *p_cwnd + 1;  // incrémentation de la fenêtre de congestion
+          // incrémentation de la fenêtre de congestion
+          if(mode==0){ // slow start
+            *p_cwnd = *p_cwnd + 1;
+          }
+          else if(mode==1){ // congestion avoidance
+            *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+          }
           for(int i=1; i<SIZE_TAB; i++){
             int index = sequenceNB-i;
             if(sequenceNB-i < 0){ index = SIZE_TAB + index; }
             if(tab_ack[index]==1){
               tab_ack[index] = 2;  // 2 -> ce segment n'a été acquitté mais un ack supérieur a été reçu (donc le paquet a bien été reçu par le client)
               *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
-              *p_cwnd = *p_cwnd + 1;  // incrémentation de la fenêtre de congestion
+              // incrémentation de la fenêtre de congestion
+              if(mode==0){ // slow start
+                *p_cwnd = *p_cwnd + 1;
+              }
+              else if(mode==1){ // congestion avoidance
+                *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+              }
             }
             // else if(tab_ack[index]==0){
             else if(tab_ack[index]!=1){
@@ -204,9 +220,15 @@ void *ack_routine(void *arguments){
 
         else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
             printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
+            // congestion avoidance
+            ssthresh = round(*p_cwnd/2);
+            if(ssthresh==0){ ssthresh = 1; }
+            printf("ssthresh : %d\n",ssthresh );
+
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            *p_cwnd = 1;
+            // *p_cwnd = 1;
+            *p_cwnd = ssthresh;
             tab_ack[sequenceNB]+=1;
             pthread_mutex_unlock(&lock);
         }
@@ -224,7 +246,12 @@ void *ack_routine(void *arguments){
 
     }
     else{  // pas d'activité sur server socket
+      // congestion avoidance
       printf("thread - timeout\n");
+      ssthresh = round(*p_cwnd/2);
+      if(ssthresh==0){ ssthresh = 1; }
+      printf("ssthresh : %d\n",ssthresh );
+
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
       *p_cwnd = 1;
@@ -274,19 +301,24 @@ int main(int argc, char* argv[]){
 
   int a = acceptUDP(server_port, serverSocket, client_addr, sockaddr_length);
 
-
+  // réception du nom du fichier
   char filename[100] = "";
   int r = recvfrom(a, &filename, sizeof(filename), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
   if(r<0){perror(""); exit(0);}
+  long total_size_file = 0;
+  if(!strcmp(filename, "ef1663en.pdf")){ total_size_file = 2154227*8; }
+  else if(!strcmp(filename, "projet2020.pdf")){ total_size_file = 103197*8; }
 
+  // démarrage du timer
   struct timeval start;
   gettimeofday(&start,0);
 
-
-  FILE* file = fopen(filename, "rb");  // ouverture du fichier à envoyer
+  // ouverture du fichier à envoyer
+  FILE* file = fopen(filename, "rb");
   printf("%s opened\n", filename);
   int fr = 0;
 
+  // Déclaration des variables
   char file_data[994];
   int sequenceNB = 1;
   int tab_ack[SIZE_TAB];
@@ -294,7 +326,7 @@ int main(int argc, char* argv[]){
     tab_ack[i] = 0;
   }
   char tab_segments[SIZE_TAB][SIZE_MESSAGE];
-  int cwnd = 1;
+  double cwnd = 1;
   // int window = cwnd;
   int window = 0;
   int retransmission = 0;
@@ -335,7 +367,7 @@ int main(int argc, char* argv[]){
   do{  // tant que le fichier n'a pas été envoyé en entier
 
     // if(window>0 && retransmission==0){
-    if(cwnd-window>0 && retransmission==0){
+    if(floor(cwnd)-window>0 && retransmission==0){
 
       if(fr==sizeof(file_data) || fr==0){
         // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
@@ -417,8 +449,11 @@ int main(int argc, char* argv[]){
   struct timeval total_time;
   timersub(&end, &start, &total_time);
   printf("total time: %ld' %ld''\n", total_time.tv_sec, total_time.tv_usec);
+  if(total_size_file != 0){
+    double debit = (double)(total_size_file) / (double)((total_time.tv_sec * 1000000 + total_time.tv_usec));
+    printf("débit : %f\n", debit);
+  }
   printf("nombre de retransmissions: %d\n", nb_retransmissions);
-
 
   return 0;
 }
