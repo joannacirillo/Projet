@@ -26,7 +26,7 @@ struct arg_struct{
   int* arg_window;
   int* arg_retransmission;
   struct timeval* send_time_tab;
-  int* arg_cwnd;
+  double* arg_cwnd;
 };
 
 
@@ -47,7 +47,7 @@ void display(int* array, int size){
  * ****************************************************************************/
 struct timeval srtt_estimation(struct timeval old_srtt, struct timeval old_rtt){
   // SRTT(k) = alpha*SRTT(k-1) + (1-alpha)*RTT(k-1)
-  double alpha = 0.3;
+  double alpha = 0.5;
   struct timeval new_srtt;
   long new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
   new_srtt.tv_sec = (time_t)(floor(new_srtt_db * 0.000001));
@@ -119,7 +119,7 @@ void *ack_routine(void *arguments){
   int* p_window = args->arg_window;
   int* p_retransmission = args->arg_retransmission;
   struct timeval *send_time_tab = args->send_time_tab;
-  int* p_cwnd = args->arg_cwnd;
+  double* p_cwnd = args->arg_cwnd;
 
   struct timeval srtt;
   struct timeval srtt_for_select;
@@ -128,10 +128,13 @@ void *ack_routine(void *arguments){
   rtt.tv_sec = 1; rtt.tv_usec = 0;
   struct timeval receive_time_tab[SIZE_TAB];
   int sequenceNB;
+  int mode = 0; // mode de retransmission (0 : slow start, 1 : congestion avoidance)
+  int ssthresh = 1000;
 
   printf("Thread created\n");
 
   while(1){
+    mode = (*p_cwnd >= ssthresh);
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
     FD_SET(a, &socketDescriptorSet);
@@ -154,41 +157,73 @@ void *ack_routine(void *arguments){
       sequenceNB = atoi(ackseq)%SIZE_TAB;
       gettimeofday(&receive_time_tab[sequenceNB],0);
 
-      if(strcmp(ackack, "ACK")==0){
+      if(strcmp(ackack, "ACK")==0){ // si le message reçu est bien un ack
 
-        if(tab_ack[sequenceNB]==1){  // ACK normal
+        if(tab_ack[sequenceNB]==1){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu)
+          printf("ACK %d received\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 0;
-          for(int i=0; i<*p_cwnd; i++){
+          tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
+          *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
+          // incrémentation de la fenêtre de congestion
+          if(mode==0){ // slow start
+            *p_cwnd = *p_cwnd + 1;
+          }
+          else if(mode==1){ // congestion avoidance
+            *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+          }
+          for(int i=1; i<SIZE_TAB; i++){
             int index = sequenceNB-i;
-            if(sequenceNB-i < 0){
-              index = SIZE_TAB + index;
-            }
+            if(sequenceNB-i < 0){ index = SIZE_TAB + index; }
             if(tab_ack[index]==1){
-              tab_ack[index] = 2;  // 2 -> ce segment a été acquitté
-              *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
-              *p_cwnd = *p_cwnd + 1;
+              tab_ack[index] = 2;  // 2 -> ce segment n'a été acquitté mais un ack supérieur a été reçu (donc le paquet a bien été reçu par le client)
+              *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
+              // incrémentation de la fenêtre de congestion
+              if(mode==0){ // slow start
+                *p_cwnd = *p_cwnd + 1;
+              }
+              else if(mode==1){ // congestion avoidance
+                *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+              }
             }
-            else if(tab_ack[(sequenceNB-i)%SIZE_TAB]==0){
+            // else if(tab_ack[index]==0){
+            else if(tab_ack[index]!=1){
               break;
             }
           }
           pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]>=2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          // if(tab_ack[sequenceNB]==2){
-          //   printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
-          //   tab_ack[sequenceNB]=3;
-          // }
-          // else {
+        else if(tab_ack[sequenceNB]==2){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu mais ack supérieur déjà reçu)
+          printf("ACK %d received\n", atoi(ackseq));
+          pthread_mutex_lock(&lock);
+          *p_retransmission = 0;
+          tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
+          pthread_mutex_unlock(&lock);
+        }
+
+        else if(tab_ack[sequenceNB]==3 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué (1 et 2) (pas de retransmission)
+            printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
+            pthread_mutex_lock(&lock);
+            // *p_retransmission = 1;
+            // *p_cwnd = 1;
+            tab_ack[sequenceNB]+=1;
+            pthread_mutex_unlock(&lock);
+        }
+
+        else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
             printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
+            // congestion avoidance
+            ssthresh = round(*p_cwnd/2);
+            if(ssthresh==0){ ssthresh = 1; }
+            printf("ssthresh : %d\n",ssthresh );
+
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            *p_cwnd = 1;
+            // *p_cwnd = 1;
+            *p_cwnd = ssthresh;
+            tab_ack[sequenceNB]+=1;
             pthread_mutex_unlock(&lock);
-            // tab_ack[sequenceNB]=2;
-          // }
         }
 
         // printf("thread: "); display(tab_ack, SIZE_TAB);
@@ -204,7 +239,12 @@ void *ack_routine(void *arguments){
 
     }
     else{  // pas d'activité sur server socket
+      // congestion avoidance
       printf("thread - timeout\n");
+      ssthresh = round(*p_cwnd/2);
+      if(ssthresh==0){ ssthresh = 1; }
+      printf("ssthresh : %d\n",ssthresh );
+
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
       *p_cwnd = 1;
@@ -229,12 +269,13 @@ int main(int argc, char* argv[]){
   // Configuration TCP
 
   int server_port = atoi(argv[1]);
+  int new_port = server_port; // numéro de port qui changera à chaque nouvelle connexion de client
 
   int serverSocket = socket(AF_INET, SOCK_DGRAM, 0);  // socket UDP
   printf("server socket #1: %d\n", serverSocket);
   if(serverSocket<0){exit(0);}
 
-  struct sockaddr_in my_addr;  // socket UDP
+  struct sockaddr_in my_addr;  // sucture pour stocker les clients UDP
   memset((char*)&my_addr, 0, sizeof(my_addr));
   my_addr.sin_family = AF_INET;
   my_addr.sin_port = htons(server_port);
@@ -250,23 +291,29 @@ int main(int argc, char* argv[]){
   memset((char*)&client_addr, 0, sizeof(client_addr));
   socklen_t sockaddr_length = sizeof(client_addr);
 
-  int fr = 0;
-
-  char file_data[994];
-  int sequenceNB = 1;
-  int tab_ack[SIZE_TAB];
+  int fr = 0; // taille des données lues dans le fichier - initialisation
+  char file_data[994]; // données lues dans le fichier - initialisation
+  int sequenceNB = 1; // numéro de séquence d'un paquet à envoyer - initialisation
+  int tab_ack[SIZE_TAB]; /* tableau contenant le statut d'un paquet :
+  0 : paquet pas encore envoyé
+  1 : paquet envoyé et ACK pas encore reçu
+  2 : ack pas encore reçu, mais ack d'un numéro de séquence supérieur reçu (donc paquet reçu par le client) (pour que le vrai ack ne soit pas considéré comme dupliqué et pour ne pas retransmettre ce paquet puisqu'il a déjà été reçu par le client)
+  3 : ack reçu
+  4 : ack dupliqué reçu
+  5, 6, 7, etc. : nouveaux acks dupliqués (incrémentation de 1 à chaque nouvel ack reçu) (=> on peut décider à partir de combien d'acks dupliqués on retransmet) */
   for(int i=0; i<SIZE_TAB; i++){
     tab_ack[i] = 0;
   }
-  char tab_segments[SIZE_TAB][SIZE_MESSAGE];
-  int cwnd = 1;
-  int window = cwnd;
-  int retransmission = 0;
-  struct timeval send_time_tab[SIZE_TAB];
+  char tab_segments[SIZE_TAB][SIZE_MESSAGE]; // tableau contenant tous les messages envoyés (pour pouvoir retransmettre sans relire dans le fichier)
+  double cwnd = 1;  // taille de la fenêtre de transmission
+  int window = 0; // nombre de paquets envoyés mais pas encore acquittés
+  int retransmission = 0;  // booléen indiquant si on doit retransmettre (0 : non, 1 : oui)
+  int nb_retransmissions = 0; // nombre de retransmissions pendant toute la durée d'envoi du fichier
+  struct timeval send_time_tab[SIZE_TAB];  // tableau contenant les temps d'envoi de chaque paquet
   for(int i=0; i<SIZE_TAB; i++){
     send_time_tab[i] = (struct timeval){0};
   }
-  int size;
+  int size;  // taille du message envoyé
 
   // CRÉATION DU THREAD POUR LA RÉCEPTION DES ACK
   pthread_t ack_thread;
@@ -288,7 +335,8 @@ int main(int argc, char* argv[]){
     FD_SET(serverSocket, &socketDescriptorSet);
     select(serverSocket+1, &socketDescriptorSet, NULL, NULL, NULL);
     if(FD_ISSET(serverSocket, &socketDescriptorSet)){  // connexion d'un nouveau client
-      int a = acceptUDP(server_port, serverSocket, client_addr, sockaddr_length);
+      int a = acceptUDP(new_port, serverSocket, client_addr, sockaddr_length);
+      new_port += 1;
       args.arg_a = a;
 
       int pid = fork(); // création d'un processus fils pour traiter ce client
@@ -297,26 +345,34 @@ int main(int argc, char* argv[]){
         printf("socket utile : %d\n", a);
         close(serverSocket);
 
+        // réception du nom du fichier
         char filename[100] = "";
         int r = recvfrom(a, &filename, sizeof(filename), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
         if(r<0){perror(""); exit(0);}
+        long total_size_file = 0;  // taille du fichier (pour calculer le débit à la fin)
+        if(!strcmp(filename, "ef1663en.pdf")){ total_size_file = 2154227*8; }
+        else if(!strcmp(filename, "projet2020.pdf")){ total_size_file = 103197*8; }
 
+        // démarrage du timer
         struct timeval start;
         gettimeofday(&start,0);
 
-        FILE* file = fopen(filename, "rb");  // ouverture du fichier à envoyer
+        // ouverture du fichier à envoyer
+        FILE* file = fopen(filename, "rb");
         printf("%s opened\n", filename);
 
+        // création du thread pour la réception des ack
         if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
           perror("pthread_create() ack_thread:"); exit(0);
         }
-        if(pthread_mutex_init(&lock, NULL) != 0){  // initialisation du mutex
+        // initialisation du mutex
+        if(pthread_mutex_init(&lock, NULL) != 0){
           perror("pthread_mutex_init():"); exit(0);
         }
 
         do{  // tant que le fichier n'a pas été envoyé en entier
 
-          if(window>0 && retransmission==0){
+          if(floor(cwnd)-window>0 && retransmission==0){
             if(fr==sizeof(file_data) || fr==0){
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
               char message[SIZE_MESSAGE] = "";
@@ -334,7 +390,7 @@ int main(int argc, char* argv[]){
 
               // Mise à jour sliding window
               pthread_mutex_lock(&lock);
-              window = window - 1;  // Décrémentation de la fenêtre de transmission
+              window = window + 1;  // Incrémentation du nombre de paquets envoyés mais pas encore acquittés
               tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
               sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
               if(fr!=sizeof(file_data)){
@@ -345,6 +401,8 @@ int main(int argc, char* argv[]){
           }
           else if(retransmission==1){
             printf("RETRANSMISSION\n");
+            nb_retransmissions += 1;
+            window = 0;
             for(int i=0; i<SIZE_TAB; i++){
               if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
                 // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
@@ -362,16 +420,15 @@ int main(int argc, char* argv[]){
                 if(s<0){perror(""); exit(0);}
                 printf("packet #%d sent\n", i);
                 gettimeofday(&send_time_tab[i],0);
+                pthread_mutex_lock(&lock);
+                window += 1;
+                pthread_mutex_unlock(&lock);
               }
             }
-            pthread_mutex_lock(&lock);
-            window = cwnd;
-            pthread_mutex_unlock(&lock);
 
             retransmission = 0;
           }
-
-        }while(tab_ack[(sequenceNB-1)%SIZE_TAB]!=2 || !feof(file));  // le dernier paquet envoyé n'a pas encore été acquitté et le paquet suivant n'est pas le dernier
+        }while(tab_ack[(sequenceNB-1)%SIZE_TAB]<=2 || !feof(file));  // le dernier paquet envoyé n'a pas encore été acquitté et le paquet suivant n'est pas le dernier
 
         pthread_join(ack_thread, NULL);
 
@@ -387,6 +444,11 @@ int main(int argc, char* argv[]){
           struct timeval total_time;
           timersub(&end, &start, &total_time);
           printf("total time: %ld' %ld''\n", total_time.tv_sec, total_time.tv_usec);
+          if(total_size_file != 0){
+            double debit = (double)(total_size_file) / (double)((total_time.tv_sec * 1000000 + total_time.tv_usec));
+            printf("débit : %f\n", debit);
+          }
+          printf("nombre de retransmissions: %d\n", nb_retransmissions);
 
           printf("pid %d is over\n", pid);
           exit(0);
@@ -397,6 +459,8 @@ int main(int argc, char* argv[]){
       }
 
     }
+
+    printf("En attente de connexion d'un nouveau client\n");
 
   }
 

@@ -141,8 +141,6 @@ void *ack_routine(void *arguments){
 
   while(1){
     mode = (*p_cwnd >= ssthresh);
-    printf("mode : %d\n",mode);
-    printf("cwnd : %d\n", (int)(floor(*p_cwnd)));
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
     FD_SET(a, &socketDescriptorSet);
@@ -167,7 +165,7 @@ void *ack_routine(void *arguments){
       if(strcmp(ackack, "ACK")==0){ // si le message reçu est bien un ack
 
         if(tab_ack[sequenceNB]==1){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu)
-          printf("ACK %d received\n", atoi(ackseq));
+          // printf("ACK %d received\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 0;
           tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
@@ -202,7 +200,7 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]==2){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu mais ack supérieur déjà reçu)
-          printf("ACK %d received\n", atoi(ackseq));
+          // printf("ACK %d received\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 0;
           tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
@@ -210,7 +208,7 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]==3 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué (1 et 2) (pas de retransmission)
-            printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
+            // printf("thread - ACK dupliqué 1 (%d)\n", atoi(ackseq));
             pthread_mutex_lock(&lock);
             // *p_retransmission = 1;
             // *p_cwnd = 1;
@@ -219,21 +217,17 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
-            printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
+            // printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
             // congestion avoidance
             ssthresh = round(*p_cwnd/2);
             if(ssthresh==0){ ssthresh = 1; }
-            printf("ssthresh : %d\n",ssthresh );
 
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            // *p_cwnd = 1;
             *p_cwnd = ssthresh;
             tab_ack[sequenceNB]+=1;
             pthread_mutex_unlock(&lock);
         }
-
-        // printf("thread: "); display(tab_ack, SIZE_TAB);
 
         if(tab_ack[(sequenceNB+1)%SIZE_TAB]==-1){
           printf("pthread_exit\n");
@@ -247,10 +241,10 @@ void *ack_routine(void *arguments){
     }
     else{  // pas d'activité sur server socket
       // congestion avoidance
-      printf("thread - timeout\n");
+      // printf("thread - timeout\n");
       ssthresh = round(*p_cwnd/2);
       if(ssthresh==0){ ssthresh = 1; }
-      printf("ssthresh : %d\n",ssthresh );
+      // printf("ssthresh : %d\n",ssthresh );
 
       pthread_mutex_lock(&lock);
       *p_retransmission = 1;
@@ -282,7 +276,7 @@ int main(int argc, char* argv[]){
   printf("server socket #1: %d\n", serverSocket);
   if(serverSocket<0){exit(0);}
 
-  struct sockaddr_in my_addr;  // socket UDP
+  struct sockaddr_in my_addr;  // structure pour stocker le client UDP
   memset((char*)&my_addr, 0, sizeof(my_addr));
   my_addr.sin_family = AF_INET;
   my_addr.sin_port = htons(server_port);
@@ -315,7 +309,7 @@ int main(int argc, char* argv[]){
 
   // ouverture du fichier à envoyer
   FILE* file = fopen(filename, "rb");
-  printf("%s opened\n", filename);
+  // printf("%s opened\n", filename);
   int fr = 0;
 
   // Déclaration des variables
@@ -325,6 +319,15 @@ int main(int argc, char* argv[]){
   for(int i=0; i<SIZE_TAB; i++){
     tab_ack[i] = 0;
   }
+    /*
+  SIGNIFICATION DES CHIFFRES DANS TAB_ACK:
+  0 : paquet pas encore envoyé
+  1 : paquet envoyé et ACK pas encore reçu
+  2 : ack pas encore reçu, mais ack d'un numéro de séquence supérieur reçu (donc paquet reçu par le client) (pour que le vrai ack ne soit pas considéré comme dupliqué et pour ne pas retransmettre ce paquet puisqu'il a déjà été reçu par le client)
+  3 : ack reçu
+  4 : ack dupliqué reçu
+  5, 6, 7, etc. : nouveaux acks dupliqués (incrémentation de 1 à chaque nouvel ack reçu) (=> on peut décider à partir de combien d'acks dupliqués on retransmet)
+  */
   char tab_segments[SIZE_TAB][SIZE_MESSAGE];
   double cwnd = 1;
   // int window = cwnd;
@@ -366,29 +369,27 @@ int main(int argc, char* argv[]){
 
   do{  // tant que le fichier n'a pas été envoyé en entier
 
-    // if(window>0 && retransmission==0){
     if(floor(cwnd)-window>0 && retransmission==0){
 
       if(fr==sizeof(file_data) || fr==0){
         // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
         char message[SIZE_MESSAGE] = "";
-        sprintf(message, "%06d", sequenceNB);  // put sequence number in message
+        sprintf(message, "%06d", sequenceNB);  // ajout du numéro de séquence dans le message
         fr = fread(file_data, 1, sizeof(file_data), file);
-        memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
-        memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
+        memcpy(message + 6, file_data, fr);  // ajout des données lues dans le fichier après le numéro de séquence dans le message
+        memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // ajout des données lues dans tab_segments à l'indice correspondant au numéro de séquence actuel
 
         // Envoi du paquet
-        int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
+        int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);
         if(s<0){perror(""); exit(0);}
-        printf("packet #%d sent\n", sequenceNB);
+        // printf("packet #%d sent\n", sequenceNB);
         // printf("size: %d\n", s);
         gettimeofday(&send_time_tab[sequenceNB%SIZE_TAB],0);
 
         // Mise à jour sliding window
         pthread_mutex_lock(&lock);
-        // window = window - 1;  // Décrémentation de la fenêtre de transmission
         window = window + 1;  // Incrémentation du nombre de paquets envoyés mais pas encore acquittés
-        tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
+        tab_ack[sequenceNB%SIZE_TAB] = 1;  // ajout du numéro de séquence du paquet envoyé dans le buffer
         sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
         if(fr!=sizeof(file_data)){
           tab_ack[sequenceNB%SIZE_TAB] = -1;
@@ -397,8 +398,8 @@ int main(int argc, char* argv[]){
       }
     }
     else if(retransmission==1){
-      printf("RETRANSMISSION\n");
       nb_retransmissions += 1;
+      // printf("RETRANSMISSION n° %d\n", nb_retransmissions);
       window = 0;
       for(int i=0; i<SIZE_TAB; i++){
         if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
@@ -415,17 +416,13 @@ int main(int argc, char* argv[]){
           // Envoi du paquet
           int s = sendto(a, message, size, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // envoi du message
           if(s<0){perror(""); exit(0);}
-          printf("packet #%d sent\n", i);
+          // printf("packet #%d sent\n", i);
           gettimeofday(&send_time_tab[i],0);
           pthread_mutex_lock(&lock);
           window = window + 1;  // Incrémentation du nombre de paquets envoyés mais pas encore acquittés
           pthread_mutex_unlock(&lock);
         }
       }
-      // pthread_mutex_lock(&lock);
-      // window = cwnd;
-      // pthread_mutex_unlock(&lock);
-
       retransmission = 0;
     }
 
@@ -436,7 +433,7 @@ int main(int argc, char* argv[]){
   // envoi d'un message FIN pour dire que c'est la fin
   int s = sendto(a, "FIN", 4, MSG_CONFIRM, (const struct sockaddr*)&client_addr, sockaddr_length);
   if(s<0){perror(""); exit(0);}
-  printf("FIN sent\n");
+  // printf("FIN sent\n");
 
 
   /******************* FIN DE L'ENVOI DU FICHIER ************************/
