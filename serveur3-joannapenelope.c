@@ -275,7 +275,7 @@ int main(int argc, char* argv[]){
   printf("server socket #1: %d\n", serverSocket);
   if(serverSocket<0){exit(0);}
 
-  struct sockaddr_in my_addr;  // sucture pour stocker les clients UDP
+  struct sockaddr_in my_addr;  // socket UDP
   memset((char*)&my_addr, 0, sizeof(my_addr));
   my_addr.sin_family = AF_INET;
   my_addr.sin_port = htons(server_port);
@@ -287,7 +287,7 @@ int main(int argc, char* argv[]){
   fd_set socketDescriptorSet;
   memset((char*)&socketDescriptorSet, 0, sizeof(socketDescriptorSet));
 
-  struct sockaddr_in client_addr; // structure pour stocker le(s) client(s) UDP
+  struct sockaddr_in client_addr; // structure pour stocker les clients UDP
   memset((char*)&client_addr, 0, sizeof(client_addr));
   socklen_t sockaddr_length = sizeof(client_addr);
 
