@@ -1,8 +1,6 @@
-Problèmes à régler :
+- Courbes de performance :
+pour le client3, débit en fonction du nombre de clients connectés en même temps au serveur
+- flightSize vs cwnd (pour ssthresh = flightSize/2)
+- à chaque perte : cwnd = 1 ou ssthresh ? (si cwnd=ssthresh alors on n'est jamais en slow start ?)
 
-
- A faire :
-  - rendre la fenêtre dynamique
-  - implémenter slow start sur serveur1
-  - retransmission : ne renvoyer que le premier paquet perdu et pas toute la fenêtre
-  - attendre 2 et pas 1 seul ack dupliqué pour retransmettre
+(testé différentes tailles de paquet (500, 1000, 2000, 5000) : 1000 semble être le mieux)

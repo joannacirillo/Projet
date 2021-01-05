@@ -225,7 +225,8 @@ void *ack_routine(void *arguments){
 
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            *p_cwnd = ssthresh;
+            // *p_cwnd = ssthresh;
+            *p_cwnd = 1;
             tab_ack[sequenceNB]+=1;
             pthread_mutex_unlock(&lock);
         }

@@ -485,7 +485,6 @@ int main(int argc, char* argv[]){
           int pid = fork(); // création d'un processus fils pour traiter ce client
           
           if(pid==0){  // processus fils
-            printf("socket utile : %d\n", a);
             close(serverSocket);
 
             // réception du nom du fichier
@@ -596,8 +595,6 @@ int main(int argc, char* argv[]){
           }
 
         }
-
-        printf("En attente de connexion d'un nouveau client\n");
 
       }
 
