@@ -212,22 +212,20 @@ void *ack_routine(void *arguments){
           pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]==3 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué (1 et 2) (=> pas de retransmission)
+        else if(tab_ack[sequenceNB]>=3 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué (1 et 2) (=> pas de retransmission)
             pthread_mutex_lock(&lock);
             tab_ack[sequenceNB]+=1;
             pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
-            // congestion avoidance
+        else if(tab_ack[sequenceNB]>=6 && tab_ack[sequenceNB]%2==0 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
             ssthresh = round(*p_cwnd/2);
             if(ssthresh==0){ ssthresh = 1; }
 
             pthread_mutex_lock(&lock);
             *p_retransmission = 1;
-            // *p_cwnd = ssthresh;
-            *p_cwnd = 1;
-            tab_ack[sequenceNB]+=1;
+            *p_cwnd = ssthresh + tab_ack[sequenceNB]-3;
+            // *p_cwnd = 1;
             pthread_mutex_unlock(&lock);
         }
 
