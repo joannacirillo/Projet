@@ -14,7 +14,7 @@
 
 // #define CWND 10
 #define SIZE_TAB 1000
-#define SIZE_MESSAGE 1000
+#define SIZE_MESSAGE 1200
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct arg_struct{
@@ -435,7 +435,7 @@ int main(int argc, char* argv[]){
       socklen_t sockaddr_length = sizeof(client_addr);
 
       int fr = 0; // taille des données lues dans le fichier - initialisation
-      char file_data[994]; // données lues dans le fichier - initialisation
+      char file_data[SIZE_MESSAGE-6]; // données lues dans le fichier - initialisation
       int sequenceNB = 1; // numéro de séquence d'un paquet à envoyer - initialisation
       int tab_ack[SIZE_TAB]; /* tableau contenant le statut d'un paquet :
       0 : paquet pas encore envoyé

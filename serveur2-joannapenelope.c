@@ -14,7 +14,7 @@
 
 #define CWND 10
 #define SIZE_TAB 1000
-#define SIZE_MESSAGE 1000
+#define SIZE_MESSAGE 1200
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct arg_struct{
@@ -250,7 +250,7 @@ int main(int argc, char* argv[]){
       printf("%s opened\n", filename);
       int fr = 0;
 
-      char file_data[994];
+      char file_data[SIZE_MESSAGE-6];
       int sequenceNB = 1;
       int tab_ack[SIZE_TAB];
       for(int i=0; i<SIZE_TAB; i++){
