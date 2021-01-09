@@ -182,6 +182,9 @@ void *ack_routine(void *arguments){
           else if(mode==1){ // congestion avoidance
             *p_cwnd = *p_cwnd + 1/(*p_cwnd);
           }
+          if(*p_cwnd>SIZE_TAB){
+            *p_cwnd = SIZE_TAB-1;
+          }
           // mise à jour des statuts des messages précédents
           for(int i=1; i<SIZE_TAB; i++){
             int index = sequenceNB-i;
@@ -195,6 +198,9 @@ void *ack_routine(void *arguments){
               }
               else if(mode==1){ // congestion avoidance
                 *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+              }
+              if(*p_cwnd>SIZE_TAB){
+                *p_cwnd = SIZE_TAB-1;
               }
             }
             else if(tab_ack[index]!=1){
@@ -337,6 +343,9 @@ void *ack_routine_with_display(void *arguments){
           else if(mode==1){ // congestion avoidance
             *p_cwnd = *p_cwnd + 1/(*p_cwnd);
           }
+          if(*p_cwnd>SIZE_TAB){
+            *p_cwnd = SIZE_TAB-1;
+          }
           // mise à jour des statuts des messages précédents
           for(int i=1; i<SIZE_TAB; i++){
             int index = sequenceNB-i;
@@ -350,6 +359,9 @@ void *ack_routine_with_display(void *arguments){
               }
               else if(mode==1){ // congestion avoidance
                 *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+              }
+              if(*p_cwnd>SIZE_TAB){
+                *p_cwnd = SIZE_TAB-1;
               }
             }
             else if(tab_ack[index]!=1){
