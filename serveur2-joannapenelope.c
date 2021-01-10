@@ -12,10 +12,11 @@
 #include <semaphore.h>
 #include <math.h>
 
-#define CWND 10
+#define CWND 100
 #define SIZE_TAB 1000
-#define SIZE_MESSAGE 1200
+// #define SIZE_MESSAGE 1200
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+int SIZE_MESSAGE;
 
 struct arg_struct{
   int arg_a; //nom de la socket utile
@@ -250,6 +251,11 @@ int main(int argc, char* argv[]){
       printf("%s opened\n", filename);
       int fr = 0;
 
+      fseek(file, 0L, SEEK_END);
+      SIZE_MESSAGE = floor(ftell(file)/999999)+7;
+      if(SIZE_MESSAGE<1000){SIZE_MESSAGE=1000;}
+      fseek(file,0L, SEEK_SET);
+
       char file_data[SIZE_MESSAGE-6];
       int sequenceNB = 1;
       int tab_ack[SIZE_TAB];
@@ -291,7 +297,7 @@ int main(int argc, char* argv[]){
         if(window>0 && retransmission==0){
           if(fr==sizeof(file_data) || fr==0){
             // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-            char message[SIZE_MESSAGE] = "";
+            char message[SIZE_MESSAGE];
             sprintf(message, "%06d", sequenceNB);  // put sequence number in message
             fr = fread(file_data, 1, sizeof(file_data), file);
             memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
@@ -320,7 +326,7 @@ int main(int argc, char* argv[]){
           for(int i=0; i<SIZE_TAB; i++){
             if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-              char message[SIZE_MESSAGE] = "";
+              char message[SIZE_MESSAGE];
               memcpy(&message, &tab_segments[i], sizeof(tab_segments[i]));  // put read data in message after sequence number
 
               // Envoi du paquet

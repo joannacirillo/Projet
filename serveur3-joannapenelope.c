@@ -14,8 +14,9 @@
 
 // #define CWND 10
 #define SIZE_TAB 1000
-#define SIZE_MESSAGE 1200
+// #define SIZE_MESSAGE 1200
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+int SIZE_MESSAGE;
 
 struct arg_struct{
   int arg_a; //nom de la socket utile
@@ -502,6 +503,11 @@ int main(int argc, char* argv[]){
             // ouverture du fichier à envoyer
             FILE* file = fopen(filename, "rb");
 
+            fseek(file, 0L, SEEK_END);
+            SIZE_MESSAGE = floor(ftell(file)/999999)+7;
+            if(SIZE_MESSAGE<1000){SIZE_MESSAGE=1000;}
+            fseek(file,0L, SEEK_SET);
+
             // création du thread pour la réception des ack
             if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
               perror("pthread_create() ack_thread:"); exit(0);
@@ -516,7 +522,7 @@ int main(int argc, char* argv[]){
               if(floor(cwnd)-window>0 && retransmission==0){
                 if(fr==sizeof(file_data) || fr==0){
                   // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-                  char message[SIZE_MESSAGE] = "";
+                  char message[SIZE_MESSAGE];
                   sprintf(message, "%06d", sequenceNB);  // put sequence number in message
                   fr = fread(file_data, 1, sizeof(file_data), file);
                   memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
@@ -550,7 +556,7 @@ int main(int argc, char* argv[]){
                     else{
                       size = sizeof(tab_segments[i]);
                     }
-                    char message[SIZE_MESSAGE] = "";
+                    char message[SIZE_MESSAGE];
                     memcpy(&message, &tab_segments[i], size);  // put read data in message after sequence number
 
                     // Envoi du paquet
@@ -704,6 +710,11 @@ int main(int argc, char* argv[]){
           FILE* file = fopen(filename, "rb");
           printf("%s opened\n", filename);
 
+          fseek(file, 0L, SEEK_END);
+          SIZE_MESSAGE = floor(ftell(file)/999999)+7;
+          if(SIZE_MESSAGE<1000){SIZE_MESSAGE=1000;}
+          fseek(file,0L, SEEK_SET);
+
           // création du thread pour la réception des ack
           if(pthread_create(&ack_thread, NULL, ack_routine_with_display, (void*) &args) != 0){
             perror("pthread_create() ack_thread:"); exit(0);
@@ -718,7 +729,7 @@ int main(int argc, char* argv[]){
             if(floor(cwnd)-window>0 && retransmission==0){
               if(fr==sizeof(file_data) || fr==0){
                 // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-                char message[SIZE_MESSAGE] = "";
+                char message[SIZE_MESSAGE];
                 sprintf(message, "%06d", sequenceNB);  // put sequence number in message
                 fr = fread(file_data, 1, sizeof(file_data), file);
                 memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
@@ -754,7 +765,7 @@ int main(int argc, char* argv[]){
                   else{
                     size = sizeof(tab_segments[i]);
                   }
-                  char message[SIZE_MESSAGE] = "";
+                  char message[SIZE_MESSAGE];
                   memcpy(&message, &tab_segments[i], size);  // put read data in message after sequence number
 
                   // Envoi du paquet

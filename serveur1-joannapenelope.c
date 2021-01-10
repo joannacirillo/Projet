@@ -13,8 +13,9 @@
 #include <math.h>
 
 #define SIZE_TAB 1000  // taille du tableau pour stocker les status des messages
-#define SIZE_MESSAGE 1600  // taille de chaque paquet
+// #define SIZE_MESSAGE 1600  // taille de chaque paquet
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  // mutex utilisé pour protéger les variables partagées entre les threads
+int SIZE_MESSAGE;
 
 struct arg_struct{  // structure utilisée pour passer des arguments à un thread
   int arg_a; //nom de la socket utile
@@ -488,6 +489,11 @@ int main(int argc, char* argv[]){
       FILE* file = fopen(filename, "rb");
       int fr = 0;
 
+      fseek(file, 0L, SEEK_END);
+      SIZE_MESSAGE = floor(ftell(file)/999999)+7;
+      if(SIZE_MESSAGE<1000){SIZE_MESSAGE=1000;}
+      fseek(file,0L, SEEK_SET);
+
       // Déclaration des variables
       char file_data[SIZE_MESSAGE-6];
       int sequenceNB = 1;
@@ -549,7 +555,7 @@ int main(int argc, char* argv[]){
 
           if(fr==sizeof(file_data) || fr==0){
             // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-            char message[SIZE_MESSAGE] = "";
+            char message[SIZE_MESSAGE];
             sprintf(message, "%06d", sequenceNB);  // ajout du numéro de séquence dans le message
             fr = fread(file_data, 1, sizeof(file_data), file);
             memcpy(message + 6, file_data, fr);  // ajout des données lues dans le fichier après le numéro de séquence dans le message
@@ -583,7 +589,7 @@ int main(int argc, char* argv[]){
               else{
                 size = sizeof(tab_segments[i]);
               }
-              char message[SIZE_MESSAGE] = "";
+              char message[SIZE_MESSAGE];
               memcpy(&message, &tab_segments[i], size);  // ajout des données dans le messages, après le numéro de séquence
 
               // Envoi du paquet
@@ -677,6 +683,11 @@ int main(int argc, char* argv[]){
     printf("%s opened\n", filename);
     int fr = 0;
 
+    fseek(file, 0L, SEEK_END);
+    SIZE_MESSAGE = floor(ftell(file)/999999)+7;
+    if(SIZE_MESSAGE<1000){SIZE_MESSAGE=1000;}
+    fseek(file,0L, SEEK_SET);
+
     // Déclaration des variables
     char file_data[SIZE_MESSAGE-6];
     int sequenceNB = 1;
@@ -738,7 +749,7 @@ int main(int argc, char* argv[]){
 
         if(fr==sizeof(file_data) || fr==0){
           // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-          char message[SIZE_MESSAGE] = "";
+          char message[SIZE_MESSAGE];
           sprintf(message, "%06d", sequenceNB);  // ajout du numéro de séquence dans le message
           fr = fread(file_data, 1, sizeof(file_data), file);
           memcpy(message + 6, file_data, fr);  // ajout des données lues dans le fichier après le numéro de séquence dans le message
@@ -775,7 +786,7 @@ int main(int argc, char* argv[]){
             else{
               size = sizeof(tab_segments[i]);
             }
-            char message[SIZE_MESSAGE] = "";
+            char message[SIZE_MESSAGE];
             memcpy(&message, &tab_segments[i], size);  // ajout des données dans le messages, après le numéro de séquence
 
             // Envoi du paquet
