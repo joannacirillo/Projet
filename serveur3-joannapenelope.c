@@ -12,7 +12,6 @@
 #include <semaphore.h>
 #include <math.h>
 
-// #define CWND 10
 #define SIZE_TAB 1000
 #define SIZE_MESSAGE 1480
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -204,7 +203,7 @@ void *ack_routine(void *arguments){
             pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
+        else if(tab_ack[sequenceNB]>=6 && tab_ack[sequenceNB]%2==0 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
             // congestion avoidance
             ssthresh = round(*p_cwnd/2);
             if(ssthresh==0){ ssthresh = 1; }
@@ -350,7 +349,7 @@ void *ack_routine_with_display(void *arguments){
             pthread_mutex_unlock(&lock);
         }
 
-        else if(tab_ack[sequenceNB]>=5 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
+        else if(tab_ack[sequenceNB]>=6 && tab_ack[sequenceNB]%2==0 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
             printf("thread - ACK dupliqué 2 (%d)\n", atoi(ackseq));
             // congestion avoidance
             ssthresh = round(*p_cwnd/2);

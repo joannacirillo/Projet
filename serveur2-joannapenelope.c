@@ -12,7 +12,7 @@
 #include <semaphore.h>
 #include <math.h>
 
-#define CWND 10
+#define CWND 100
 #define SIZE_TAB 1000
 #define SIZE_MESSAGE 1480
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -44,7 +44,7 @@ void display(int* array, int size){
 // FONCTION POUR CALCULER LE RTT (POUR LE TIMER DES ACKS)
 struct timeval srtt_estimation(struct timeval old_srtt, struct timeval old_rtt){
   // SRTT(k) = alpha*SRTT(k-1) + (1-alpha)*RTT(k-1)
-  double alpha = 0.6;
+  double alpha = 0.9;
   struct timeval new_srtt;
   long new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
   new_srtt.tv_sec = (time_t)(floor(new_srtt_db * 0.000001));
