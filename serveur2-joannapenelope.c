@@ -80,7 +80,6 @@ int acceptUDP(int server_port, int serverSocket, struct sockaddr_in client_addr,
   int server_port2 = server_port+1;
 
   int serverSocket2 = socket(AF_INET, SOCK_DGRAM, 0);  // socket UDP pour les messages utiles
-  printf("server socket #2: %d\n", serverSocket2);
   if(serverSocket2<0){exit(0);}
 
   struct sockaddr_in my_addr2;  // socket UDP pour les messages utiles
@@ -121,8 +120,6 @@ void *ack_routine(void *arguments){
   struct timeval receive_time_tab[SIZE_TAB];
   int sequenceNB;
 
-  printf("Thread created\n");
-
   while(1){
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
@@ -142,7 +139,6 @@ void *ack_routine(void *arguments){
       char ackseq[7];  // récupérer "00000N" dans "ACK00000N"
       memset(ackseq, 0, 7);
       memcpy(ackseq, ack+3, 6);
-      // printf("ACK %d received\n", atoi(ackseq));
       sequenceNB = atoi(ackseq)%SIZE_TAB;
       gettimeofday(&receive_time_tab[sequenceNB],0);
 
@@ -168,20 +164,17 @@ void *ack_routine(void *arguments){
         }
 
         else if(tab_ack[sequenceNB]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          // printf("ACK dupliqué (%d)\n", atoi(ackseq));
           pthread_mutex_lock(&lock);
           *p_retransmission = 1;
           pthread_mutex_unlock(&lock);
         }
-
-        // printf("thread: "); display(tab_ack, SIZE_TAB);
 
         if(tab_ack[(sequenceNB+1)%SIZE_TAB]==-1){
           printf("pthread_exit\n");
           pthread_exit(0);
         }
 
-      }  // fin du if(strcmp(ack, "ACK"))
+      }  
       timersub(&receive_time_tab[sequenceNB%SIZE_TAB], &send_time_tab[sequenceNB%SIZE_TAB], &rtt);
       srtt = srtt_estimation(srtt, rtt);
 
@@ -210,7 +203,6 @@ int main(int argc, char* argv[]){
   int server_port = atoi(argv[1]);
 
   int serverSocket = socket(AF_INET, SOCK_DGRAM, 0);  // socket UDP
-  printf("server socket #1: %d\n", serverSocket);
   if(serverSocket<0){exit(0);}
 
   struct sockaddr_in my_addr;  // socket UDP
@@ -247,7 +239,6 @@ int main(int argc, char* argv[]){
     ***********************************************************************/
 
       FILE* file = fopen(filename, "rb");  // ouverture du fichier à envoyer
-      printf("%s opened\n", filename);
       int fr = 0;
 
       char file_data[SIZE_MESSAGE-6];
@@ -300,7 +291,6 @@ int main(int argc, char* argv[]){
             // Envoi du paquet
             int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
             if(s<0){perror(""); exit(0);}
-            // printf("packet #%d sent\n", sequenceNB);
             gettimeofday(&send_time_tab[sequenceNB%SIZE_TAB],0);
 
             // Mise à jour sliding window
@@ -326,7 +316,6 @@ int main(int argc, char* argv[]){
               // Envoi du paquet
               int s = sendto(a, message, sizeof(tab_segments[i]), MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
               if(s<0){perror(""); exit(0);}
-              // printf("packet #%d sent\n", i);
               new_wind = new_wind + 1;
               gettimeofday(&send_time_tab[i],0);
             }
