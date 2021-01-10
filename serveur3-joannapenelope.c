@@ -14,7 +14,7 @@
 
 // #define CWND 10
 #define SIZE_TAB 1000
-#define SIZE_MESSAGE 1200
+#define SIZE_MESSAGE 1480
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct arg_struct{

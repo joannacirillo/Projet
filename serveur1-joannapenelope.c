@@ -13,7 +13,7 @@
 #include <math.h>
 
 #define SIZE_TAB 1000  // taille du tableau pour stocker les status des messages
-#define SIZE_MESSAGE 1600  // taille de chaque paquet
+#define SIZE_MESSAGE 1480  // taille de chaque paquet
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  // mutex utilisé pour protéger les variables partagées entre les threads
 
 struct arg_struct{  // structure utilisée pour passer des arguments à un thread
