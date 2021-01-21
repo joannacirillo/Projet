@@ -1,43 +1,3 @@
-/*
-client demande un fichier au serveur (avec le nom du fichier) -> serveur envoie ce fichier au client
-
-1. stop and go : envoi d'un segment, réception d'un ack, etc.
--> pb : rcvfrom du ack est bloquant : on ne peut rien faire en attendant le ack (ça ralentit le serveur)
-=> rendre le rcvfrom non bloquant => fenêtres
-
-2. Fenêtres :
-  window=10;
-  sendto(msg);
-  window--;
-  rcvfrom(ack);
-  if(good ack){
-    window++;
-  }
--> rdvfrom est tjrs bloquant
-
-=> threads:
-1 thread pour sendto(msg); window--;
-1 thread pour rdvfrom(ack); window++;
-
-=> ou bien select :
-  window=10;
-  sendto(msg);
-  window--;
-  select(..., timeval=0);
-  if(ISSET(...)){
-    rcvfrom(ack);
-    if(good ack){
-      window++;
-    }
-  }
--> si un ack est perdu, on est bloqués => retransmettre après timeout ou ack dupliqué
-
-3. Retransmissions (estimation RTT)
-
-4. Fenêtre dynamqique :
-augmentation des fenêtres pas forcément de 1 à chaque fois
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -49,9 +9,11 @@ augmentation des fenêtres pas forcément de 1 à chaque fois
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
+#include <math.h>
 
-int CWND = 10;
-int SIZE_TAB = 1000;
+#define SIZE_TAB 1000
+#define SIZE_MESSAGE 1480
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct arg_struct{
@@ -61,41 +23,11 @@ struct arg_struct{
   fd_set arg_socketDescriptorSet;
   int* arg_tab_ack;
   int* arg_window;
+  int* arg_retransmission;
+  struct timeval* send_time_tab;
+  double* arg_cwnd;
 };
 
-
-// int first_nil_index(int* array){
-//   int b;
-//   for(int i=0; i<CWND; i++){
-//     b = 1;
-//     if(array[i]==0){
-//       for(int j=i; j<CWND; j++){
-//         if(array[j]!=0){
-//           b=0; break;
-//         }
-//       }
-//       if(b==1){
-//         return i;
-//       }
-//     }
-//   }
-//   return CWND;
-// }
-//
-// void delete(int* array, int n){
-//   int i;
-//   for(i=0; i<CWND; i++){
-//     if(array[i]==n){
-//       break;
-//     }
-//   }
-//   for(int j=i; j<CWND-1; j++){
-//     array[j-i]=array[j+1];
-//   }
-//   for(int j=0; j<=i; j++){
-//     array[CWND-1-j]=0;
-//   }
-// }
 
 void display(int* array, int size){
   for(int i=0; i<size; i++){
@@ -109,23 +41,51 @@ void display(int* array, int size){
   printf("|\n");
 }
 
-// FONCTION POUR CALCULER LE RTT (POUR LE TIMER DES ACKS)
-struct timeval srtt(struct timeval old_srtt, struct timeval old_rtt){
-  double alpha = 0.9;
+/******************************************************************************
+ * ********* FONCTION POUR CALCULER LE RTT (POUR LE TIMER DES ACKS) ***********
+ * ****************************************************************************/
+struct timeval srtt_estimation(struct timeval old_srtt, struct timeval old_rtt){
+  // SRTT(k) = alpha*SRTT(k-1) + (1-alpha)*RTT(k-1)
+  double alpha = 0.5;
   struct timeval new_srtt;
-  double new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
-  // new_srtt.tv_sec =
-
+  long new_srtt_db = alpha*(1000000*old_srtt.tv_sec + old_srtt.tv_usec) + (1-alpha)*(1000000*old_rtt.tv_sec + old_rtt.tv_usec);
+  new_srtt.tv_sec = (time_t)(floor(new_srtt_db * 0.000001));
+  new_srtt.tv_usec = (suseconds_t)(new_srtt_db - new_srtt.tv_sec*1000000);
   return new_srtt;
 }
 
-// FONCTION ACCEPT QUI CRÉE UNE NOUVELLE SOCKET SUR UN 2ÈME PORT POUR LES MESSAGES UTILES
+/******************************************************************************
+ * ****** FONCTION POUR LES MESSAGES DE CONNEXION (SYN, SYN-ACK, ACK) *********
+ * ****************************************************************************/
+void synack(int serverSocket, struct sockaddr_in client_addr, socklen_t sockaddr_length, int server_port2){
+  // réception de SYN
+  char syn[10] = "";
+  int r = recvfrom(serverSocket, &syn, sizeof(syn), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
+  if(r<0){perror(""); exit(0);}
+  printf("%s received\n", syn);
+
+  // envoi de SYN-ACK
+  char synack[11] = "SYN-ACK";
+  sprintf(synack+7, "%d", server_port2);
+  int s = sendto(serverSocket, &synack, strlen(synack), 0, (struct sockaddr*)&client_addr, sockaddr_length);
+  if(s<0){perror(""); exit(0);}
+  printf("SYN-ACK sent\n");
+
+  // réception de ACK
+  char ack[10] = "";
+  r = recvfrom(serverSocket, &ack, sizeof(ack), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
+  if(r<0){perror(""); exit(0);}
+  printf("%s received\n", ack);
+}
+
+/********************************************************************************************
+ ** FONCTION ACCEPT QUI CRÉE UNE NOUVELLE SOCKET SUR UN 2ÈME PORT POUR LES MESSAGES UTILES **
+ *******************************************************************************************/
 int acceptUDP(int server_port, int serverSocket, struct sockaddr_in client_addr, socklen_t sockaddr_length){
 
   int server_port2 = server_port+1;
 
   int serverSocket2 = socket(AF_INET, SOCK_DGRAM, 0);  // socket UDP pour les messages utiles
-  printf("server socket #2: %d\n", serverSocket2);
   if(serverSocket2<0){exit(0);}
 
   struct sockaddr_in my_addr2;  // socket UDP pour les messages utiles
@@ -143,27 +103,6 @@ int acceptUDP(int server_port, int serverSocket, struct sockaddr_in client_addr,
 
 }
 
-// FONCTION POUR LES MESSAGES DE CONNEXION (SYN, SYN-ACK, ACK)
-void synack(int serverSocket, struct sockaddr_in client_addr, socklen_t sockaddr_length, int server_port2){
-  // réception de SYN
-  char syn[10] = "";
-  int r = recvfrom(serverSocket, &syn, sizeof(syn), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
-  if(r<0){perror(""); exit(0);}
-  printf("%s received\n", syn);
-
-  // envoi de SYN-ACK
-  char synack[13] = "SYN-ACK";
-  sprintf(synack+7, "%d", server_port2);
-  int s = sendto(serverSocket, &synack, strlen(synack), 0, (struct sockaddr*)&client_addr, sockaddr_length);
-  if(s<0){perror(""); exit(0);}
-  printf("SYN-ACK sent\n");
-
-  // réception de ACK
-  char ack[10] = "";
-  r = recvfrom(serverSocket, &ack, sizeof(ack), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
-  if(r<0){perror(""); exit(0);}
-  printf("%s received\n", ack);
-}
 
 /*******************************************************************************
 ************ FONCTION EXÉCUTÉE PAR LE THREAD QUI REÇOIT LES ACK ****************
@@ -176,19 +115,28 @@ void *ack_routine(void *arguments){
   fd_set socketDescriptorSet = args->arg_socketDescriptorSet;
   int* tab_ack = args->arg_tab_ack;
   int* p_window = args->arg_window;
+  int* p_retransmission = args->arg_retransmission;
+  struct timeval *send_time_tab = args->send_time_tab;
+  double* p_cwnd = args->arg_cwnd;
 
-  // struct timeval srtt = 4;
-  // struct timeval rtt = 1;
-  struct timeval receive_time;
+  struct timeval srtt;
+  struct timeval srtt_for_select;
+  srtt.tv_sec = 1; srtt.tv_usec = 0;
+  struct timeval rtt;
+  rtt.tv_sec = 1; rtt.tv_usec = 0;
+  struct timeval receive_time_tab[SIZE_TAB];
   int sequenceNB;
+  int mode = 0; // mode de retransmission (0 : slow start, 1 : congestion avoidance)
+  int ssthresh = 1000;
 
-  printf("Thread created\n");
 
   while(1){
+    mode = (*p_cwnd >= ssthresh);
     // réception du ACK avec select (non bloquant)
     FD_ZERO(&socketDescriptorSet);
     FD_SET(a, &socketDescriptorSet);
-    select((a+1), &socketDescriptorSet, NULL, NULL, 1);
+    srtt_for_select = srtt;
+    select((a+1), &socketDescriptorSet, NULL, NULL, &srtt_for_select);
 
     if(FD_ISSET(a, &socketDescriptorSet)){  // il y a eu une activité sur serverSocket
       // réception du ACK
@@ -196,47 +144,99 @@ void *ack_routine(void *arguments){
       memset(ack, 0, 11);
       int r = recvfrom(a, &ack, 10, MSG_WAITALL, (struct sockaddr *) &client_addr, &sockaddr_length);
       if(r<0){perror(""); exit(0);}
-      gettimeofday(&receive_time,0);
-      char ackack[4];  // récupérer "ACK" dans "ACK_AAAAAA"
+      char ackack[4];  // récupérer "ACK" dans "ACK00000N"
       memset(ackack, 0, 4);
       memcpy(ackack, ack, 3);
-      char ackseq[7];  // récupérer "AAAAAA" dans "ACK_AAAAAA"
+      char ackseq[7];  // récupérer "00000N" dans "ACK00000N"
       memset(ackseq, 0, 7);
-      memcpy(ackseq, ack+4, 6);
+      memcpy(ackseq, ack+3, 6);
       sequenceNB = atoi(ackseq)%SIZE_TAB;
-      if(strcmp(ackack, "ACK")==0){
+      gettimeofday(&receive_time_tab[sequenceNB],0);
 
-        if(tab_ack[sequenceNB]==1){  // ACK normal
-          printf("ACK %d received\n", atoi(ackseq));
+      if(strcmp(ackack, "ACK")==0){ // si le message reçu est bien un ack
+
+        if(tab_ack[sequenceNB]==1){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu)
           pthread_mutex_lock(&lock);
-          tab_ack[sequenceNB] = 2;  // 2 -> ce segment a été acquitté
-          for(int i=0; i<SIZE_TAB; i++){
-            if(tab_ack[(sequenceNB-i)%SIZE_TAB]==1){
-              tab_ack[(sequenceNB-i)%SIZE_TAB] = 2;
+          *p_retransmission = 0;
+          tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
+          *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
+          // incrémentation de la fenêtre de congestion
+          if(mode==0){ // slow start
+            *p_cwnd = *p_cwnd + 1;
+          }
+          else if(mode==1){ // congestion avoidance
+            *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+          }
+          for(int i=1; i<SIZE_TAB; i++){
+            int index = sequenceNB-i;
+            if(sequenceNB-i < 0){ index = SIZE_TAB + index; }
+            if(tab_ack[index]==1){
+              tab_ack[index] = 2;  // 2 -> ce segment n'a été acquitté mais un ack supérieur a été reçu (donc le paquet a bien été reçu par le client)
+              *p_window = *p_window - 1;  // décrémentation du nombre de paquets envoyés non acquittés
+              // incrémentation de la fenêtre de congestion
+              if(mode==0){ // slow start
+                *p_cwnd = *p_cwnd + 1;
+              }
+              else if(mode==1){ // congestion avoidance
+                *p_cwnd = *p_cwnd + 1/(*p_cwnd);
+              }
             }
-            else if(tab_ack[(sequenceNB-i)%SIZE_TAB]==0){
+            else if(tab_ack[index]!=1){
               break;
             }
           }
-          *p_window = *p_window + 1;  // incrémentation de la fenêtre de transmission
           pthread_mutex_unlock(&lock);
         }
-        else if(tab_ack[sequenceNB]==2 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué
-          printf("thread - ACK dupliqué (%d)\n", atoi(ackseq));
+
+        else if(tab_ack[sequenceNB]==2){  // ACK normal (segment correspondant déjà envoyé et ack pas encore reçu mais ack supérieur déjà reçu)
           pthread_mutex_lock(&lock);
-          *p_window = 0;  // on met window à 0 pour que le serveur ne puisse plus envoyer et retransmette
+          *p_retransmission = 0;
+          tab_ack[sequenceNB] = 3;  // 3 -> ce segment a été acquitté
           pthread_mutex_unlock(&lock);
         }
-        printf("thread: "); display(tab_ack, SIZE_TAB);
+
+        else if(tab_ack[sequenceNB]==3 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // ACK dupliqué (1 et 2) (pas de retransmission)
+            pthread_mutex_lock(&lock);
+            tab_ack[sequenceNB]+=1;
+            pthread_mutex_unlock(&lock);
+        }
+
+        else if(tab_ack[sequenceNB]>=6 && tab_ack[sequenceNB]%2==0 && tab_ack[(sequenceNB+1)%SIZE_TAB]==1){  // 3ème ACK dupliqué (=> retransmission)
+            ssthresh = round(*p_cwnd/2);
+            if(ssthresh==0){ ssthresh = 1; }
+
+            pthread_mutex_lock(&lock);
+            *p_retransmission = 1;
+            *p_cwnd = ssthresh;
+            tab_ack[sequenceNB]+=1;
+            pthread_mutex_unlock(&lock);
+        }
+
         if(tab_ack[(sequenceNB+1)%SIZE_TAB]==-1){
           pthread_exit(0);
         }
-      }  // fin du if(strcmp(ack, "ACK"))
+
+      }
+      timersub(&receive_time_tab[sequenceNB%SIZE_TAB], &send_time_tab[sequenceNB%SIZE_TAB], &rtt);
+      srtt = srtt_estimation(srtt, rtt);
+
     }
-    // timersub(&receive_time, &send_time, &rtt);
-    // srtt = srtt(srtt, rtt);
+    else{  // pas d'activité sur server socket
+      ssthresh = round(*p_cwnd/2);
+      if(ssthresh==0){ ssthresh = 1; }
+
+      pthread_mutex_lock(&lock);
+      *p_retransmission = 1;
+      *p_cwnd = 1;
+      pthread_mutex_unlock(&lock);
+    }
+
   }
 }
+
+
+
+
 
 /*******************************************************************************
 ********************************** MAIN ****************************************
@@ -248,10 +248,11 @@ int main(int argc, char* argv[]){
     exit(0);
   }
 
+  // Configuration TCP
   int server_port = atoi(argv[1]);
+  int new_port = server_port; // numéro de port qui changera à chaque nouvelle connexion de client
 
   int serverSocket = socket(AF_INET, SOCK_DGRAM, 0);  // socket UDP
-  printf("server socket #1: %d\n", serverSocket);
   if(serverSocket<0){exit(0);}
 
   struct sockaddr_in my_addr;  // socket UDP
@@ -266,146 +267,176 @@ int main(int argc, char* argv[]){
   fd_set socketDescriptorSet;
   memset((char*)&socketDescriptorSet, 0, sizeof(socketDescriptorSet));
 
-  struct sockaddr_in client_addr; // structure pour stocker le(s) client(s) UDP
+  struct sockaddr_in client_addr; // structure pour stocker les clients UDP
   memset((char*)&client_addr, 0, sizeof(client_addr));
   socklen_t sockaddr_length = sizeof(client_addr);
 
+  int fr = 0; // taille des données lues dans le fichier - initialisation
+  char file_data[SIZE_MESSAGE-6]; // données lues dans le fichier - initialisation
+  int sequenceNB = 1; // numéro de séquence d'un paquet à envoyer - initialisation
+  int tab_ack[SIZE_TAB]; /* tableau contenant le statut d'un paquet :
+  0 : paquet pas encore envoyé
+  1 : paquet envoyé et ACK pas encore reçu
+  2 : ack pas encore reçu, mais ack d'un numéro de séquence supérieur reçu (donc paquet reçu par le client) (pour que le vrai ack ne soit pas considéré comme dupliqué et pour ne pas retransmettre ce paquet puisqu'il a déjà été reçu par le client)
+  3 : ack reçu
+  4 : ack dupliqué reçu
+  5, 6, 7, etc. : nouveaux acks dupliqués (incrémentation de 1 à chaque nouvel ack reçu) (=> on peut décider à partir de combien d'acks dupliqués on retransmet) */
+  for(int i=0; i<SIZE_TAB; i++){
+    tab_ack[i] = 0;
+  }
+  char tab_segments[SIZE_TAB][SIZE_MESSAGE]; // tableau contenant tous les messages envoyés (pour pouvoir retransmettre sans relire dans le fichier)
+  double cwnd = 1;  // taille de la fenêtre de transmission
+  int window = 0; // nombre de paquets envoyés mais pas encore acquittés
+  int retransmission = 0;  // booléen indiquant si on doit retransmettre (0 : non, 1 : oui)
+  int nb_retransmissions = 0; // nombre de retransmissions pendant toute la durée d'envoi du fichier
+  struct timeval send_time_tab[SIZE_TAB];  // tableau contenant les temps d'envoi de chaque paquet
+  for(int i=0; i<SIZE_TAB; i++){
+    send_time_tab[i] = (struct timeval){0};
+  }
+  int size;  // taille du message envoyé
 
-  int a = acceptUDP(server_port, serverSocket, client_addr, sockaddr_length);
+  // CRÉATION DU THREAD POUR LA RÉCEPTION DES ACK
+  pthread_t ack_thread;
 
+  // définition des arguments à passer au thread ack_thread :
+  struct arg_struct args;
+  args.arg_a = 0;
+  args.arg_client_addr = client_addr;
+  args.arg_sockaddr_length = sockaddr_length;
+  args.arg_socketDescriptorSet = socketDescriptorSet;
+  args.arg_tab_ack = tab_ack;
+  args.arg_window = &window;
+  args.send_time_tab = send_time_tab;
+  args.arg_retransmission = &retransmission;
+  args.arg_cwnd = &cwnd;
 
-  while(1){  // tant que le client demande des fichiers
-    char buffer[100] = "";
-    int r = recvfrom(a, &buffer, sizeof(buffer), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
-    if(r<0){perror(""); exit(0);}
-    printf("message received: %s\n", buffer);
-
-    /***********************************************************************
-    ************************** ENVOI DU FICHIER ****************************
-    ***********************************************************************/
-
-    if(buffer[0]=='F' && buffer[1]=='I' && buffer[2]=='L' && buffer[3]=='E' && buffer[4]==' '){ // message received is asking for a file
-      char filename[50] = "";  // récupération du nom du fichier
-      for(int i=5; i<strlen(buffer)-1; i++){
-        filename[i-5] = buffer[i];
-      }
-
-      FILE* file = fopen(filename, "rb");  // ouverture du fichier à envoyer
-      printf("%s opened\n", filename);
-      int fr = 0;
-
-      struct timeval send_time;
-      char file_data[994];
-      int sequenceNB = 6;
-      int tab_ack[SIZE_TAB];
-      for(int i=0; i<SIZE_TAB; i++){
-        tab_ack[i] = 0;
-      }
-      char tab_segments[SIZE_TAB];
-      for(int i=0; i<SIZE_TAB; i++){
-        tab_segments[i] = "";
-      }
-      int window = CWND;
-
-      // CRÉATION DU THREAD POUR LA RÉCEPTION DES ACK
-      pthread_t ack_thread;
-
-      // définition des arguments à passer au thread ack_thread :
-      struct arg_struct args;
+  while(1){
+    FD_ZERO(&socketDescriptorSet);
+    FD_SET(serverSocket, &socketDescriptorSet);
+    select(serverSocket+1, &socketDescriptorSet, NULL, NULL, NULL);
+    if(FD_ISSET(serverSocket, &socketDescriptorSet)){  // connexion d'un nouveau client
+      int a = acceptUDP(new_port, serverSocket, client_addr, sockaddr_length);
+      new_port += 1;
       args.arg_a = a;
-      args.arg_client_addr = client_addr;
-      args.arg_sockaddr_length = sockaddr_length;
-      args.arg_socketDescriptorSet = socketDescriptorSet;
-      args.arg_tab_ack = tab_ack;
-      args.arg_window = &window;
 
-      if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
-        perror("pthread_create() ack_thread:"); exit(0);
-      }
+      int pid = fork(); // création d'un processus fils pour traiter ce client
+      
+      if(pid==0){  // processus fils
+        close(serverSocket);
 
+        // réception du nom du fichier
+        char filename[100] = "";
+        int r = recvfrom(a, &filename, sizeof(filename), MSG_WAITALL, (struct sockaddr*)&client_addr, &sockaddr_length);
+        if(r<0){perror(""); exit(0);}
+        long total_size_file = 0;  // taille du fichier (pour calculer le débit à la fin)
+        if(!strcmp(filename, "ef1663en.pdf")){ total_size_file = 2154227*8; }
+        else if(!strcmp(filename, "projet2020.pdf")){ total_size_file = 103197*8; }
 
-      do{  // tant que le fichier n'a pas été envoyé en entier
-        printf("début du do - window=%d - buffer: ", window);
-        // for(int i=0; i<first_nil_index(seqNb_tab); i++){
-        display(tab_ack, SIZE_TAB);
+        // démarrage du timer
+        struct timeval start;
+        gettimeofday(&start,0);
 
-        if(window>0){
-          // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-          char message[1000] = "";
-          sprintf(message, "%06d", sequenceNB);  // put sequence number in message
-          fr = fread(file_data, 1, sizeof(file_data), file);
-          memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
-          tab_segments[sequenceNB%SIZE_TAB] = malloc(sizeof(message));
-          memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
+        // ouverture du fichier à envoyer
+        FILE* file = fopen(filename, "rb");
 
-          // Envoi du paquet
-          int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
-          if(s<0){perror(""); exit(0);}
-          printf("packet #%d sent\n", sequenceNB);
-          gettimeofday(&send_time,0);
-
-          // Mise à jour sliding window
-          pthread_mutex_lock(&lock);
-          window = window - 1;  // Décrémentation de la fenêtre de transmission
-          tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
-          sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
-          pthread_mutex_unlock(&lock);
+        // création du thread pour la réception des ack
+        if(pthread_create(&ack_thread, NULL, ack_routine, (void*) &args) != 0){
+          perror("pthread_create() ack_thread:"); exit(0);
         }
-        else{  // window = 0 => retransmettre
-          int new_wind = 0;
-          printf("RETRANSMISSION\n");
-          for(int i=0; i<SIZE_TAB; i++){
-            if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
+        // initialisation du mutex
+        if(pthread_mutex_init(&lock, NULL) != 0){
+          perror("pthread_mutex_init():"); exit(0);
+        }
+
+        do{  // tant que le fichier n'a pas été envoyé en entier
+
+          if(floor(cwnd)-window>0 && retransmission==0){
+            if(fr==sizeof(file_data) || fr==0){
               // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
-              char message[1000] = "";
-              memcpy(&message, &tab_segments[i], sizeof(tab_segments[i]));  // put read data in message after sequence number
+              char message[SIZE_MESSAGE] = "";
+              sprintf(message, "%06d", sequenceNB);  // put sequence number in message
+              fr = fread(file_data, 1, sizeof(file_data), file);
+              memcpy(message + 6, file_data, fr);  // put read data in message after sequence number
+              memcpy(&tab_segments[sequenceNB%SIZE_TAB], &message, fr+6); // put read data in tab_segments at index corresponding to current sequence number
 
               // Envoi du paquet
-              int s = sendto(a, message, sizeof(tab_segments[i]), MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
+              int s = sendto(a, message, fr+6, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
               if(s<0){perror(""); exit(0);}
-              printf("packet #%d sent\n", i);
-              new_wind = new_wind + 1;
+              gettimeofday(&send_time_tab[sequenceNB%SIZE_TAB],0);
+
+              // Mise à jour sliding window
+              pthread_mutex_lock(&lock);
+              window = window + 1;  // Incrémentation du nombre de paquets envoyés mais pas encore acquittés
+              tab_ack[sequenceNB%SIZE_TAB] = 1;  // On met le numéro de séquence du paquet envoyé dans le buffer
+              sequenceNB = sequenceNB + 1;  // incrémentation du numéro de séquence
+              if(fr!=sizeof(file_data)){
+                tab_ack[sequenceNB%SIZE_TAB] = -1;
+              }
+              pthread_mutex_unlock(&lock);
             }
           }
-          pthread_mutex_lock(&lock);
-          window = CWND - new_wind;
-          pthread_mutex_unlock(&lock);
-          sleep(1);
-        }
+          else if(retransmission==1){
+            nb_retransmissions += 1;
+            window = 0;
+            for(int i=0; i<SIZE_TAB; i++){
+              if(tab_ack[i]==1){  // si le segment n°i a été envoyé mais pas acquitté
+                // Construction du paquet à envoyer (découpage du fichier + n° de séquence)
+                if(feof(file) && i == (sequenceNB-1)%SIZE_TAB){
+                  size = fr+6;
+                }
+                else{
+                  size = sizeof(tab_segments[i]);
+                }
+                char message[SIZE_MESSAGE] = "";
+                memcpy(&message, &tab_segments[i], size);  // put read data in message after sequence number
 
-      }while(fr == sizeof(file_data));  // le fichier a été envoyé en entier
+                // Envoi du paquet
+                int s = sendto(a, message, size, MSG_CONFIRM, (const struct sockaddr *) &client_addr, sockaddr_length);  // send message
+                if(s<0){perror(""); exit(0);}
+                gettimeofday(&send_time_tab[i],0);
+                pthread_mutex_lock(&lock);
+                window += 1;
+                pthread_mutex_unlock(&lock);
+              }
+            }
 
-      pthread_mutex_lock(&lock);
-      tab_ack[sequenceNB%SIZE_TAB] = -1;
-      pthread_mutex_unlock(&lock);
-      pthread_join(ack_thread, NULL);
+            retransmission = 0;
+          }
+        }while(tab_ack[(sequenceNB-1)%SIZE_TAB]<=2 || !feof(file));  // le dernier paquet envoyé n'a pas encore été acquitté et le paquet suivant n'est pas le dernier
 
-      // envoi d'un message DONE pour dire que c'est la fin
-      int s = sendto(a, "DONE", 4, MSG_CONFIRM, (const struct sockaddr*)&client_addr, sockaddr_length);
-      if(s<0){perror(""); exit(0);}
-      printf("DONE sent\n");
-      char ack[5]="";
-      r = recvfrom(a, &ack, 5, MSG_WAITALL, (struct sockaddr *) &client_addr, &sockaddr_length);
-      if(r<0){perror(""); exit(0);}
-      if(strcmp(ack, "ACK")==0){printf("ACK received\n");}
+        pthread_join(ack_thread, NULL);
 
+        // envoi d'un message FIN pour dire que c'est la fin
+        int s = sendto(a, "FIN", 4, MSG_CONFIRM, (const struct sockaddr*)&client_addr, sockaddr_length);
+        if(s<0){perror(""); exit(0);}
+
+        /******************* FIN DE L'ENVOI DU FICHIER ************************/
+
+          struct timeval end;
+          gettimeofday(&end,0);
+          struct timeval total_time;
+          timersub(&end, &start, &total_time);
+          printf("total time: %ld' %ld''\n", total_time.tv_sec, total_time.tv_usec);
+          if(total_size_file != 0){
+            double debit = (double)(total_size_file) / (double)((total_time.tv_sec * 1000000 + total_time.tv_usec));
+            printf("débit : %f\n", debit);
+          }
+          printf("nombre de retransmissions: %d\n", nb_retransmissions);
+
+          printf("pid %d is over\n", pid);
+          exit(0);
+      }
+
+      else if(pid>0){  // processus père
+        close(a);
+      }
 
     }
-
-    /******************* FIN DE L'ENVOI DU FICHIER ************************/
-
-    char str[30];
-    printf("Message to send to client: ");
-    fgets(str, 30, stdin);
-
-    int s = sendto(a, str, strlen(str), MSG_CONFIRM, (const struct sockaddr*)&client_addr, sockaddr_length);
-    if(s<0){perror(""); exit(0);}
-    printf("message sent\n");
 
   }
 
   close(serverSocket);
 
-
   return 0;
+  
 }
